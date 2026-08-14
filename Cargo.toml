@@ -18,9 +18,14 @@ authors = ["zutreexo contributors"]
 publish = false
 
 [workspace.dependencies]
-zutreexo-accumulator = { path = "crates/zutreexo-accumulator" }
-zutreexo-chain = { path = "crates/zutreexo-chain" }
-zutreexo-testkit = { path = "crates/zutreexo-testkit" }
+# `version` alongside `path` is deliberate. A path-only dependency carries no
+# version requirement, which is a wildcard (`*`), and `deny.toml` sets
+# `wildcards = "deny"` — so omitting it fails the cargo-deny CI job even though
+# these are internal crates that are never published. Keep these in step with
+# `workspace.package.version` above.
+zutreexo-accumulator = { path = "crates/zutreexo-accumulator", version = "0.0.0" }
+zutreexo-chain = { path = "crates/zutreexo-chain", version = "0.0.0" }
+zutreexo-testkit = { path = "crates/zutreexo-testkit", version = "0.0.0" }
 
 blake2b_simd = "1.0"
 rustreexo = "0.6"
