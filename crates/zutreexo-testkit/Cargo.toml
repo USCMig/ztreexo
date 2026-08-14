@@ -1,0 +1,23 @@
+[package]
+name = "zutreexo-testkit"
+description = "Differential-testing oracles, fixtures, and deterministic vectors for zutreexo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The naive oracle depends on blake2b_simd directly and *not* on
+# zutreexo-accumulator's hashing. See crates/zutreexo-testkit/src/naive.rs.
+blake2b_simd.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+zutreexo-accumulator.workspace = true
+
+[lints]
+workspace = true

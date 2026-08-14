@@ -19,3 +19,23 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Personal-only files: anything built at your request that doesn't directly
+# support the codebase (notes, drafts, one-off scripts, etc.). Never synced.
+.personal/
+
+# Zebra is an external validator run only as a benchmark/differential-testing
+# oracle (CLAUDE.md Phase 0/2) — never part of zutreexo's own data. Its chain
+# state defaults to a path outside this repo (see docker/.env); this is a
+# fallback in case one ever lands under the repo root instead. See also
+# docker/.gitignore, which excludes docker/.env and docker/state/.
+/zebra/
+/zebra-state/
+
+# Phase 0 fixture corpus: ~65 MB of raw block hex per capture. The manifest is
+# committed (fixtures/MANIFEST.sha256); the blocks themselves belong in LFS or
+# a bucket, per CLAUDE.md Phase 0. Regenerate with scripts/measure_baseline.sh.
+fixtures/*.jsonl
+
+# Personal drafts and notes — not project deliverables.
+personal/

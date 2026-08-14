@@ -1,0 +1,56 @@
+# cargo-deny configuration.
+#
+# The licensing rule here is the enforcement arm of the decision in
+# docs/design.md: zutreexo is MIT OR Apache-2.0 and must not acquire a copyleft
+# dependency. CLAUDE.md §3 singles out ZODL Slipstream (AGPL-3.0-only) — linking
+# it would relicense this entire project, including for users interacting with
+# it over a network. Reading its source for ideas is fine; linking is not, and
+# the `deny` list below makes an accidental `cargo add` fail CI rather than
+# fail review.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Everything we intend to depend on: librustzcash, Zebra, and rustreexo are all
+# MIT/Apache-2.0.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    # `bitcoin_hashes`, `bitcoin-io`, and friends, pulled in by `rustreexo`.
+    # CC0-1.0 is a public-domain dedication and is what the Rust Bitcoin
+    # ecosystem standardised on. Permissive, but noted here because some
+    # organisations exclude it over its explicit patent-rights disclaimer — if
+    # that becomes a problem, it arrives with `rustreexo`, so revisit alongside
+    # the upstream blocker in docs/design.md.
+    "CC0-1.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+# Copyleft licences are excluded by omission from `licenses.allow` above; these
+# entries name the specific crates we have reason to expect someone might try
+# to add, so the failure message says why rather than just "license not allowed".
+deny = [
+    # AGPL-3.0-only. See CLAUDE.md §3 and docs/design.md.
+    { name = "slipstream", reason = "AGPL-3.0-only; linking it would relicense zutreexo. Reimplement, or read for ideas only." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

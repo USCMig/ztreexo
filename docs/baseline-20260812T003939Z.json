@@ -1,0 +1,115 @@
+{
+  "measured_at": "2026-08-12T00:39:39Z",
+  "synced": true,
+  "chain": "main",
+  "tip_height": 3444699,
+  "value_pools": [
+    {
+      "id": "transparent",
+      "chainValue": 12449980.58669581,
+      "chainValueZat": 1244998058669581,
+      "monitored": true
+    },
+    {
+      "id": "sprout",
+      "chainValue": 22621.26786698,
+      "chainValueZat": 2262126786698,
+      "monitored": true
+    },
+    {
+      "id": "sapling",
+      "chainValue": 539829.50885278,
+      "chainValueZat": 53982950885278,
+      "monitored": true
+    },
+    {
+      "id": "orchard",
+      "chainValue": 1183726.10621783,
+      "chainValueZat": 118372610621783,
+      "monitored": true
+    },
+    {
+      "id": "lockbox",
+      "chainValue": 55931.25,
+      "chainValueZat": 5593125000000,
+      "monitored": true
+    },
+    {
+      "id": "ironwood",
+      "chainValue": 2619886.4459114,
+      "chainValueZat": 261988644591140,
+      "monitored": true
+    }
+  ],
+  "note_commitments": {
+    "sapling_final_state_bytes": "418",
+    "orchard_final_state_bytes": "322"
+  },
+  "rates": {
+    "range": [
+      3443700,
+      3444699
+    ],
+    "totals": {
+      "blocks": 1000,
+      "txs": 4625,
+      "t_in": 7146,
+      "t_out": 5722,
+      "sprout": 0,
+      "sapling": 138,
+      "orchard": 6208,
+      "ironwood": 2930
+    },
+    "per_block": {
+      "txs": 4.625,
+      "t_in": 7.146,
+      "t_out": 5.722,
+      "sprout": 0.0,
+      "sapling": 0.138,
+      "orchard": 6.208,
+      "ironwood": 2.93
+    },
+    "field_names_matched": {
+      "ironwood": "ironwood.actions",
+      "orchard": "orchard.actions",
+      "sapling": "vShieldedSpend"
+    },
+    "pools_unverified": [
+      "sprout"
+    ],
+    "tx_keys_observed": [
+      "authdigest",
+      "bindingSig",
+      "blockhash",
+      "blocktime",
+      "confirmations",
+      "expiryheight",
+      "height",
+      "hex",
+      "in_active_chain",
+      "ironwood",
+      "locktime",
+      "orchard",
+      "overwintered",
+      "size",
+      "time",
+      "txid",
+      "vShieldedOutput",
+      "vShieldedSpend",
+      "valueBalance",
+      "valueBalanceZat",
+      "version",
+      "versiongroupid",
+      "vin",
+      "vjoinsplit",
+      "vout"
+    ],
+    "warnings": [
+      "pool 'sprout' holds value on-chain but the 1000-block sample counted zero nullifiers. Either no sprout spends occurred in this range, or none of ['vjoinsplit', 'vJoinSplit', 'joinsplits'] is the field Zebra actually emits. Treat this rate as UNKNOWN, not zero."
+    ]
+  },
+  "node": {
+    "state_dir_bytes": 297969021572,
+    "rss_kb": 4926504
+  }
+}

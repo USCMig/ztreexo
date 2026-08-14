@@ -1,0 +1,85 @@
+# Zebra mainnet node for zutreexo benchmarking and differential testing.
+#
+#   cd docker && docker compose up -d
+# or, preferably, drive it through ../scripts/zebra-node.sh.
+#
+# Settings come from docker/.env (copy .env.example). The defaults below are
+# what applies when that file is absent.
+
+name: ztreexo-zebra
+
+services:
+  zebrad:
+    # Pinned, not :latest. Every number in docs/benchmarks.md is measured
+    # against a specific validator build; a silent image bump under a running
+    # baseline invalidates the comparison.
+    image: zfnd/zebra:${ZEBRA_VERSION:-6.3.0}
+    container_name: ztreexo-zebrad
+    restart: unless-stopped
+
+    # Run directly as the host user, so the bind-mounted state dir stays
+    # readable from the host without sudo — measure_baseline.sh --state-dir
+    # needs `du` on it.
+    #
+    # The alternative — starting as root and letting the entrypoint drop
+    # privileges — does not work here: it uses `setpriv --init-groups`, which
+    # requires the target uid to exist in the container's /etc/passwd, and the
+    # image only knows its own `zebra` user (uid 10001). With `user:` set, the
+    # entrypoint sees a non-root uid and execs zebrad directly instead.
+    user: "${ZEBRA_UID:-1000}:${ZEBRA_GID:-1000}"
+    environment:
+      UID: "${ZEBRA_UID:-1000}"
+      GID: "${ZEBRA_GID:-1000}"
+      CONFIG_FILE_PATH: /etc/zebrad/zebrad.toml
+      # Mounted at /state rather than under the image's $HOME: /home/zebra is
+      # mode 0700 owned by the image's own uid 10001, so a process running as
+      # the host user cannot traverse into it. The entrypoint creates and
+      # chowns whatever these point at, and `/` as their parent is left alone.
+      # These are the authoritative paths — zebrad.toml deliberately does not
+      # also set cache_dir, since ZEBRA_* env wins over the file anyway.
+      ZEBRA_STATE__CACHE_DIR: /state
+      ZEBRA_RPC__COOKIE_DIR: /state
+
+    volumes:
+      - ./zebrad.toml:/etc/zebrad/zebrad.toml:ro
+      # Bind mount, not a named volume: a named volume lives under
+      # /var/lib/docker and needs root to measure.
+      - ${ZEBRA_STATE_DIR:-${HOME}/.local/share/ztreexo/zebra}:/state
+
+    ports:
+      # RPC and health bind to loopback on the host. Note that Docker's
+      # published ports bypass ufw/iptables INPUT rules, so the explicit
+      # 127.0.0.1 prefix is what keeps the unauthenticated RPC off the LAN.
+      - "127.0.0.1:${ZEBRA_RPC_PORT:-8232}:8232"
+      - "127.0.0.1:${ZEBRA_HEALTH_PORT:-8080}:8080"
+      # P2P is bound to all interfaces on purpose: inbound peers speed up and
+      # stabilise IBD. Set ZEBRA_P2P_BIND=127.0.0.1 in .env for outbound-only.
+      - "${ZEBRA_P2P_BIND:-0.0.0.0}:${ZEBRA_P2P_PORT:-8233}:8233"
+
+    # RocksDB wants a clean shutdown. The Docker default of 10s before SIGKILL
+    # forces a WAL replay on the next start and, on a bad day, a full
+    # re-verification. Give it real time to flush.
+    stop_grace_period: 5m
+
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+
+    healthcheck:
+      # /healthy, not /ready: this reports "the process is up and has peers",
+      # which is what a restart policy should key on. Sync progress is a
+      # separate question — see `zebra-node.sh wait-sync`, which polls /ready.
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:8080/healthy"]
+      interval: 30s
+      timeout: 10s
+      # IBD start-up (opening RocksDB, finding peers) can take a while on a
+      # large existing state dir; don't flap the container in the meantime.
+      start_period: 10m
+      retries: 5
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

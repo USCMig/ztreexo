@@ -146,22 +146,6 @@ reimplementing it. Use `zcash_primitives` / `zcash_protocol` for consensus types
 (nullifiers, outpoints, network params). Use `zebra-chain` and `zebra-state` as
 the source of truth for replay. Do not vendor consensus-critical logic.
 
-**⚠️ Licensing constraint — decide before writing a line of code.** The
-`librustzcash` crates and Zebra are MIT/Apache-2.0, which is fine. But ZODL's
-Slipstream is **AGPL-3.0-only** (copyright Znewco, Inc. d/b/a ZODL), with
-commercial licenses sold separately and an explicit carve-out reserving App
-Store distribution to official Zodl builds. If this project ever links
-Slipstream — even just to reuse its block-fetch layer — the entire application
-becomes AGPL, including for users interacting with it over a network. Pick one
-now and record it in `docs/design.md`:
-
-- **Do not link Slipstream.** Keep zutreexo MIT/Apache-2.0 and reimplement any
-  orchestration you need. Recommended default: the two projects operate at
-  different layers (see §2.3) so there is little to reuse anyway.
-- **Accept AGPL** and licence zutreexo the same way, knowingly.
-
-Reading Slipstream's source for *ideas* is not linking. Copying its code is.
-
 ---
 
 ## 4. Phased plan

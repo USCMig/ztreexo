@@ -1,0 +1,6 @@
+# Host-specific: ports, paths, image pin overrides.
+.env
+
+# Never let a chain state dir land in the repo, even if someone points
+# ZEBRA_STATE_DIR at the default relative path.
+state/

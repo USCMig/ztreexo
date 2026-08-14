@@ -1,0 +1,17 @@
+[package]
+name = "zutreexo-csn"
+description = "Compact state node: validates Zcash blocks holding only accumulator roots and a proof cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+zutreexo-accumulator.workspace = true
+zutreexo-chain.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The definition-of-done sweeps are too slow for every push.
+  schedule:
+    - cron: "0 4 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # `--all-targets` matters: it covers tests and benches, which is where
+      # the panicking-construct bans are easiest to violate by accident.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Docs
+        run: cargo doc --workspace --no-deps --document-private-items
+
+      # Compiling the benches catches API drift without paying for a run.
+      - name: Benches compile
+        run: cargo bench --workspace --no-run
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  # CLAUDE.md Phase 1 definition of done: proptests green at 10k cases. Far too
+  # slow for a per-push job, so it runs nightly and on demand.
+  proptest-sweep:
+    name: proptest 10k
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Property sweep
+        env:
+          PROPTEST_CASES: "10000"
+        run: cargo test --release --workspace --test properties --test differential

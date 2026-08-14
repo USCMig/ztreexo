@@ -1,0 +1,17 @@
+[package]
+name = "zutreexo-chain"
+description = "Zcash chain semantics over the zutreexo accumulators: block application and reorg handling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+zutreexo-accumulator.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zutreexo-accumulator",
+    "crates/zutreexo-chain",
+    "crates/zutreexo-bridge",
+    "crates/zutreexo-csn",
+    "crates/zutreexo-testkit",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/USCMigs/zutreexo"
+authors = ["zutreexo contributors"]
+publish = false
+
+[workspace.dependencies]
+zutreexo-accumulator = { path = "crates/zutreexo-accumulator" }
+zutreexo-chain = { path = "crates/zutreexo-chain" }
+zutreexo-testkit = { path = "crates/zutreexo-testkit" }
+
+blake2b_simd = "1.0"
+rustreexo = "0.6"
+thiserror = "2.0"
+
+criterion = "0.8"
+hex = "0.4"
+proptest = "1.11"
+
+# Lints applied to every crate in the workspace. See CLAUDE.md §5 rule 3: no
+# unwrap/panic in accumulator or apply paths, because a panic in block
+# application is a remote crash vector. `clippy.toml` exempts test code, where
+# panicking is the point.
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# Integer overflow is a consensus bug, not a wrapping convenience. Zebra takes
+# the same position. `clippy::arithmetic_side_effects` is deliberately *not*
+# denied above: it fires on every `i + 1` and pushes the real checks into noise.
+# Explicit `checked_*` guards the boundaries that can actually overflow (leaf
+# counts, tree indices, deserialization lengths); this catches the rest.
+[profile.release]
+overflow-checks = true
+
+[profile.bench]
+debug = true
+overflow-checks = true

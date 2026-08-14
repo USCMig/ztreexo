@@ -1,0 +1,58 @@
+# zebrad config for the zutreexo benchmarking node.
+#
+# Only options that differ from zebrad's defaults are set here. Run
+#   docker run --rm --entrypoint zebrad zfnd/zebra:6.3.0 generate
+# to print the full default skeleton with every section documented.
+#
+# Precedence: ZEBRA_SECTION__KEY env vars > this file > built-in defaults.
+# docker-compose.yml mounts this at /etc/zebrad/zebrad.toml and points
+# CONFIG_FILE_PATH at it.
+
+[network]
+network = "Mainnet"
+# Bind P2P on all container interfaces; compose decides what the host exposes.
+listen_addr = "0.0.0.0:8233"
+
+# NOTE: `state.cache_dir` and `rpc.cookie_dir` are deliberately absent. They are
+# set via ZEBRA_STATE__CACHE_DIR / ZEBRA_RPC__COOKIE_DIR in docker-compose.yml,
+# because the image entrypoint reads those same env vars to decide which
+# directories to create and chown. Setting them here too would create a second
+# source of truth that env would silently win against.
+
+[rpc]
+# RPC is disabled by default in zebrad (no listen_addr). Phase 0's
+# scripts/measure_baseline.sh needs it.
+listen_addr = "0.0.0.0:8232"
+
+# Cookie auth is off because the RPC port is published to 127.0.0.1 only (see
+# docker-compose.yml). If you ever publish this port on a routable interface,
+# set this back to true and mount the cookie from the state dir — an
+# unauthenticated Zcash RPC on a reachable address is a wide-open door.
+enable_cookie_auth = false
+
+# 0 = use all available cores for RPC request handling.
+parallel_cpu_threads = 0
+
+# Zaino (CLAUDE.md Phase 4) talks to Zebra over a separate indexer socket
+# rather than JSON-RPC. Uncomment when the bridge node needs it, and publish
+# the port in docker-compose.yml.
+# indexer_listen_addr = "0.0.0.0:8231"
+
+[health]
+# /healthy and /ready. `wait-sync` in scripts/zebra-node.sh polls /ready, which
+# is true when the node is within `ready_max_blocks_behind` of the tip and the
+# tip is younger than `ready_max_tip_age`.
+listen_addr = "0.0.0.0:8080"
+min_connected_peers = 1
+ready_max_blocks_behind = 2
+ready_max_tip_age = "5m"
+
+[consensus]
+# Checkpoint verification for historical blocks. Leave on: turning it off
+# multiplies IBD time and changes nothing about the state zutreexo reads.
+checkpoint_sync = true
+
+[tracing]
+# Docker log files should not contain ANSI escapes.
+use_color = false
+force_use_color = false

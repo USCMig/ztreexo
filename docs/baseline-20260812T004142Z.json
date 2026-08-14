@@ -1,0 +1,137 @@
+{
+  "measured_at": "2026-08-12T00:41:42Z",
+  "synced": true,
+  "chain": "main",
+  "tip_height": 3444700,
+  "value_pools": [
+    {
+      "id": "transparent",
+      "chainValue": 12450006.44570949,
+      "chainValueZat": 1245000644570949,
+      "monitored": true
+    },
+    {
+      "id": "sprout",
+      "chainValue": 22621.26786698,
+      "chainValueZat": 2262126786698,
+      "monitored": true
+    },
+    {
+      "id": "sapling",
+      "chainValue": 539829.50885278,
+      "chainValueZat": 53982950885278,
+      "monitored": true
+    },
+    {
+      "id": "orchard",
+      "chainValue": 1183726.10621783,
+      "chainValueZat": 118372610621783,
+      "monitored": true
+    },
+    {
+      "id": "lockbox",
+      "chainValue": 55931.4375,
+      "chainValueZat": 5593143750000,
+      "monitored": true
+    },
+    {
+      "id": "ironwood",
+      "chainValue": 2619861.96189772,
+      "chainValueZat": 261986196189772,
+      "monitored": true
+    }
+  ],
+  "treestate": {
+    "sapling": {
+      "final_root": "2b88f5fe04a9f01086dd94cfff2408fe3be7c71fc661b4f938df504327af6e4c",
+      "frontier_bytes": 418
+    },
+    "orchard": {
+      "final_root": "165d1c3296f2cf9a25ee4f92eb72ada0b1222d887bda47a02dd234709cea3301",
+      "frontier_bytes": 322
+    },
+    "ironwood": {
+      "final_root": "03af1ab0533196377480fa6051c41ea8a94ea28d96326f6a7edbdc403ec09119",
+      "frontier_bytes": 354
+    }
+  },
+  "rates": {
+    "range": [
+      3443701,
+      3444700
+    ],
+    "totals": {
+      "blocks": 1000,
+      "txs": 4619,
+      "t_in": 7118,
+      "t_out": 5716,
+      "sprout": 0,
+      "sapling": 138,
+      "orchard": 6192,
+      "ironwood": 2934
+    },
+    "per_block": {
+      "txs": 4.619,
+      "t_in": 7.118,
+      "t_out": 5.716,
+      "sprout": 0.0,
+      "sapling": 0.138,
+      "orchard": 6.192,
+      "ironwood": 2.934
+    },
+    "commitments_total": {
+      "sprout": 0,
+      "sapling": 330,
+      "orchard": 6192,
+      "ironwood": 2934
+    },
+    "commitments_per_block": {
+      "sprout": 0.0,
+      "sapling": 0.33,
+      "orchard": 6.192,
+      "ironwood": 2.934
+    },
+    "field_names_matched": {
+      "ironwood": "ironwood.actions",
+      "orchard": "orchard.actions",
+      "sapling": "vShieldedSpend"
+    },
+    "pools_unverified": [
+      "sprout"
+    ],
+    "tx_keys_observed": [
+      "authdigest",
+      "bindingSig",
+      "blockhash",
+      "blocktime",
+      "confirmations",
+      "expiryheight",
+      "height",
+      "hex",
+      "in_active_chain",
+      "ironwood",
+      "locktime",
+      "orchard",
+      "overwintered",
+      "size",
+      "time",
+      "txid",
+      "vShieldedOutput",
+      "vShieldedSpend",
+      "valueBalance",
+      "valueBalanceZat",
+      "version",
+      "versiongroupid",
+      "vin",
+      "vjoinsplit",
+      "vout"
+    ],
+    "warnings": [
+      "pool 'sprout' holds value on-chain but the 1000-block sample counted zero nullifiers. Either no sprout spends occurred in this range, or none of ['vjoinsplit', 'vJoinSplit', 'joinsplits'] is the field Zebra actually emits. Treat this rate as UNKNOWN, not zero."
+    ]
+  },
+  "node": {
+    "state_dir_bytes": 297969133065,
+    "rss_kb": 4926404
+  }
+}

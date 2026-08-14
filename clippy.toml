@@ -1,0 +1,6 @@
+# CLAUDE.md §5 rule 3 bans unwrap/panic in accumulator and apply paths. Tests are
+# where a panic is the *point*, so exempt them rather than littering `#[allow]`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

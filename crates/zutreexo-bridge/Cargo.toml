@@ -1,0 +1,17 @@
+[package]
+name = "zutreexo-bridge"
+description = "Proof-serving bridge node: holds the full accumulator state and answers membership and non-membership queries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+zutreexo-accumulator.workspace = true
+zutreexo-chain.workspace = true
+
+[lints]
+workspace = true
