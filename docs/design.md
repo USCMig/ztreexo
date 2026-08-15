@@ -115,7 +115,12 @@ Two further corrections to the picture:
   9.264/block landing in a single tree: 1,102 years at today's rate, 11 years
   at 100×.
 
-### The open decision
+### Resolved 2026-08-14: depth 40
+
+`DEFAULT_DEPTH` is now **40**. Reasoning below; the decision was taken on the
+measured numbers rather than deferred to Phase 3.
+
+
 
 Depth 32 is comfortable for realistic growth — 165 years even at a sustained
 tenfold increase — but 100× sustained adoption puts the ceiling inside the
@@ -135,12 +140,15 @@ The asymmetry favours depth: overshooting costs a fixed bandwidth premium
 forever, while undershooting costs a hard consensus migration under time
 pressure.
 
-**Not changed unilaterally.** `DEFAULT_DEPTH` is still 32. Moving it changes
-every root the project has ever produced, including the pinned vectors, so it
-is a deliberate call rather than a reaction to one measurement — but it must be
-made **before Phase 3 freezes the on-disk format**. My recommendation is
-depth 40, or 36 as a compromise if proof bandwidth turns out to dominate the
-Phase 5 result.
+**Chosen: 40.** The deciding argument is that asymmetry. 16.5 years of headroom
+under a plausible-if-optimistic adoption scenario is not enough margin for a
+format that can only be changed by a network upgrade, and 1.1e12 leaves removes
+the question entirely rather than deferring it.
+
+If Phase 5 finds proof bandwidth dominating the result, 36 remains available as
+a compromise (16× depth-32 capacity for +12.5% bytes) — but changing it then
+means regenerating every pinned root, so treat 40 as settled unless a
+measurement forces it.
 
 Depth is a constructor parameter, so a pool needing more can be instantiated
 deeper without touching the algebra. Different depths produce different roots,
@@ -295,6 +303,35 @@ This finding is evidence for option 3, but not proof of it — the decision shou
 be made on Phase 0/Phase 5 measurements, not on the inconvenience of a
 dependency. Recording it here so the argument is not re-derived from scratch
 later.
+
+### Resolved 2026-08-14: keep the transparent forest
+
+**Decision: the transparent side stays in scope.** Option 1 (report upstream and
+work around) rather than option 3 (drop it).
+
+The Phase 0 measurement showed the transparent UTXO set is flat *in aggregate*,
+and I read that as weakening the case. The counter-argument, which is better
+than mine: **centralised exchanges deal almost exclusively in transparent
+funds.** Shielded adoption is growing, but exchange flow is the dominant source
+of transparent transactions and it is not going away in any near-term horizon —
+so transparent throughput stays high even while the *net* set size holds steady.
+
+That reframes the flat-set finding. A flat set means the storage saving does not
+compound, which is a real limit on the upside. It does not mean the transparent
+side is idle: a high spend rate against a steady-state set is exactly the
+workload Utreexo's cheap-deletion design was built for, and it is the case worth
+exercising.
+
+Consequences:
+
+* The upstream defect above moves from "reason to drop the feature" to "blocker
+  to route around." Options, in order: report it upstream, and if that stalls,
+  either pin a working revision or implement the forest ourselves.
+* The transparent-side property coverage in `tests/properties.rs` stays narrowed
+  until the defect is resolved, and `tests/upstream_rustreexo.rs` remains the
+  alarm.
+* Phase 5 still measures both halves honestly and separately. Keeping the
+  transparent forest in scope is not a commitment to shipping it.
 
 The nullifier IMT, which is the part that carries the project's claimed value,
 is entirely unaffected: it depends on nothing but `blake2b_simd`.

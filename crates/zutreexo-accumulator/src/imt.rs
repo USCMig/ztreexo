@@ -23,13 +23,29 @@
 //! exactly `depth` siblings, one code path handles every insertion, and a
 //! future ZIP can specify a constant proof size.
 //!
-//! The default of 32 gives 2^32 ≈ 4.29e9 leaves against a present-day combined
-//! nullifier count in the low tens of millions. Critically, the ceiling is
-//! derived from *transaction* throughput, not block count: NU7's proposed 3×
-//! faster blocks would triple the block rate without tripling the number of
-//! shielded spends, and even a sustained three-orders-of-magnitude increase in
-//! spend volume leaves decades of headroom. Phase 0's measured growth rate
-//! must confirm this before Phase 3 freezes the on-disk format.
+//! The default of 40 gives 2^40 ≈ 1.1e12 leaves. That number comes from Phase 0
+//! measurement, not estimation, and the earlier default of 32 was raised
+//! *because* the measurement contradicted the reasoning behind it.
+//!
+//! Measured at mainnet tip: Orchard reveals 6.192 nullifiers per block,
+//! Ironwood 2.934, Sapling 0.138. At 420,768 blocks/year the fastest-filling
+//! pool would exhaust depth 32 in 1,648 years at today's rate — but only
+//! 16.5 years at a sustained hundredfold increase in spend volume, and 5.5
+//! years if NU7 triples block rate and volume follows. That is inside the
+//! plausible lifetime of a consensus format, and an append-only tree never
+//! reclaims space.
+//!
+//! Depth 40 costs +23% proof bytes and +25% verification time for 256× the
+//! capacity: 4,220 years even at a hundredfold increase. The asymmetry decided
+//! it — overshooting costs a fixed bandwidth premium, undershooting costs a
+//! hard migration under time pressure.
+//!
+//! The ceiling is derived from *transaction* throughput, not block count, which
+//! is what makes it robust to NU7's proposed 3× faster blocks: those triple the
+//! block rate without tripling the number of shielded spends, which is bounded
+//! by demand rather than block spacing.
+//!
+//! See `docs/design.md` D3 for the full derivation and the correction history.
 //!
 //! # Value ordering
 //!
@@ -58,8 +74,8 @@ pub const MIN_DEPTH: u8 = 1;
 /// Capped at 63 so `1u64 << depth` is always well defined.
 pub const MAX_DEPTH: u8 = 63;
 
-/// Default tree depth: 2^32 leaves. See the module docs for the derivation.
-pub const DEFAULT_DEPTH: u8 = 32;
+/// Default tree depth: 2^40 leaves. See the module docs for the derivation.
+pub const DEFAULT_DEPTH: u8 = 40;
 
 /// A nullifier, ordered as a big-endian 256-bit unsigned integer.
 ///

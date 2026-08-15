@@ -12,6 +12,12 @@ publish.workspace = true
 [dependencies]
 zutreexo-accumulator.workspace = true
 thiserror.workspace = true
+zebra-chain.workspace = true
+# Used in error messages (hex txids), so a real dependency, not dev-only.
+hex.workspace = true
+
+[dev-dependencies]
+zutreexo-testkit.workspace = true
 
 [lints]
 workspace = true

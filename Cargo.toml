@@ -31,6 +31,12 @@ blake2b_simd = "1.0"
 rustreexo = "0.6"
 thiserror = "2.0"
 
+# Block and transaction deserialization for replay. CLAUDE.md §3: Zebra is the
+# source of truth, and consensus-critical parsing is not vendored. 12.0.0 is the
+# first published version carrying `src/ironwood.rs`, so it can parse the pool
+# that activated at 3,428,143 — anything older silently cannot.
+zebra-chain = "12.0"
+
 criterion = "0.8"
 hex = "0.4"
 proptest = "1.11"

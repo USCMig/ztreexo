@@ -40,6 +40,11 @@ pub struct HashVector {
 
 /// Roots of freshly initialised trees — sentinel leaf only.
 ///
+/// Depth 40 is `zutreexo-accumulator`'s `DEFAULT_DEPTH` (not a link: that crate
+/// is a dev-dependency of this one, not a lib dependency, deliberately). Depths
+/// 10 and 32 are kept because they were pinned before the depth decision, and a
+/// root that moves is worth noticing regardless of which depth it belongs to.
+///
 /// These are the most sensitive values in the file: they depend on the empty
 /// leaf separator, the node separator, the sentinel's encoding, and the depth,
 /// and on nothing else.
@@ -83,6 +88,26 @@ pub const EMPTY_TREE_ROOTS: &[RootVector] = &[
         pool: "ironwood",
         depth: 32,
         root: "392417acfb14a3a5f2711d1ac8a796860eedbc550d803ba7271e74384885702b",
+    },
+    RootVector {
+        pool: "sprout",
+        depth: 40,
+        root: "10ac3c3d48790b358a4ced15ead5d47b25739c6cb365987f7c3c82eb14364ae3",
+    },
+    RootVector {
+        pool: "sapling",
+        depth: 40,
+        root: "085b161f07d30bbde6305f40dcd5d200ddee745189f98e28eda2c1b0d25bce30",
+    },
+    RootVector {
+        pool: "orchard",
+        depth: 40,
+        root: "5d7ab2847197560aae9157838f4c47c33448e7fe109ad5e96d6b1a29647ff8eb",
+    },
+    RootVector {
+        pool: "ironwood",
+        depth: 40,
+        root: "dc0ec676f6f24a8023585c7554617a384c8127551f2a8a161388aa807be7ac9d",
     },
 ];
 
@@ -136,6 +161,26 @@ pub const SEQUENCE_ROOTS: &[RootVector] = &[
         depth: 32,
         root: "6f7feccf733f4bdf3065e1f38e2a52e63b641c1c31e1536fb60a8527f242ddbf",
     },
+    RootVector {
+        pool: "sprout",
+        depth: 40,
+        root: "33689000ea31e22ac6b7bc7c2f1815ef8e9be900179cf249dbf5a9cf7d31a3ad",
+    },
+    RootVector {
+        pool: "sapling",
+        depth: 40,
+        root: "33239264b978bbb429b80cacd185717d66fd261469139ebdc29493eda9515913",
+    },
+    RootVector {
+        pool: "orchard",
+        depth: 40,
+        root: "dadffd3ca3a01f08cf00b9720ed14f8256c0e20eabbafd13735c7af390bc9bdc",
+    },
+    RootVector {
+        pool: "ironwood",
+        depth: 40,
+        root: "f4114cfc9d855cb4ccc7eeffd0f6e2e94916bf1b3dfea4633e30b2ffc1cf53c1",
+    },
 ];
 
 /// Roots after inserting `Value::MAX` and then `1`, at depth 32.
@@ -163,6 +208,26 @@ pub const MAX_EDGE_ROOTS: &[RootVector] = &[
         pool: "ironwood",
         depth: 32,
         root: "ee8ba4f75c78827110b63055e58a227bfa7f00dc664d87b9c789ce8ed4bfdca7",
+    },
+    RootVector {
+        pool: "sprout",
+        depth: 40,
+        root: "a6e3f85e48902ed03542dfa0d3961bf02408328baa1d46f71fd05fa63df1ca81",
+    },
+    RootVector {
+        pool: "sapling",
+        depth: 40,
+        root: "4daf5676e727fd49aabcf9ccaa3e2905df9dab201aeae7f2d0d7d57ad38aaad0",
+    },
+    RootVector {
+        pool: "orchard",
+        depth: 40,
+        root: "c1f0dad5dffbc1b0348596821c223ef5a04398eaf1069f76377272330c58eece",
+    },
+    RootVector {
+        pool: "ironwood",
+        depth: 40,
+        root: "a231d3cf1ee8cdbb16537090cccf2962c6c14601dad5da5adcc94753a1d30ff4",
     },
 ];
 

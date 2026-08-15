@@ -1,31 +1,37 @@
 //! Chain semantics over the zutreexo accumulators.
 //!
-//! **Phase 2 — not yet implemented.** This crate is scaffolding: the workspace
-//! layout in CLAUDE.md §3 is fixed up front so later phases have somewhere to
-//! land, but the logic below is deliberately absent until Phase 1's definition
-//! of done passes.
+//! **Phase 2, in progress.** Stage 2a — block ingestion, state, and the
+//! transition function — is implemented. Rollback (`rollback.rs`) and the
+//! reorg fuzzer are stage 2c and are not here yet.
 //!
-//! What lands here:
+//! # What this crate does
 //!
-//! * `pool.rs` — per-pool chain state. [`PoolId`] itself already lives in
-//!   `zutreexo-accumulator`, because the hash domain separators are
-//!   pool-specific and domain separation is a Phase 1 concern. It is
-//!   re-exported below so chain code has one obvious import.
-//! * `block_apply.rs` — the deterministic state transition function. The order
-//!   of operations is specified in CLAUDE.md Phase 2 and is not negotiable:
-//!   transparent inputs verified and deleted, then transparent outputs
-//!   inserted, then per-pool nullifiers checked for non-membership and
-//!   inserted, then note commitments appended, then a `StateDelta` emitted
-//!   carrying every preimage needed to undo the block.
-//! * `rollback.rs` — reorg handling. Utreexo deletion is not naturally
-//!   invertible, so undo requires the deleted leaves *and* their positions,
-//!   persisted in the `StateDelta`. This is the least-tested area of
-//!   accumulator work generally and the invariant is total: apply, undo,
-//!   re-apply a divergent branch must give byte-identical roots to a cold
-//!   replay.
+//! [`extract::summarize_block`] turns a `zebra-chain` block into the per-pool
+//! nullifiers, transparent inputs and outputs, and commitment counts that a
+//! state transition needs. [`block_apply::apply_block`] then folds that
+//! summary into [`pool::ChainAccumulators`] in the exact order CLAUDE.md
+//! Phase 2 specifies, returning a [`block_apply::StateDelta`] carrying
+//! everything needed to undo it.
 //!
-//! Nothing in this crate may change which blocks a node accepts. Phases 0–5 are
-//! consensus-neutral by construction: proofs arrive out-of-band from bridge
-//! nodes rather than embedded in transactions (CLAUDE.md §1, §5 rule 1).
+//! # Two properties worth knowing before using it
+//!
+//! **The shielded side replays from anywhere; the transparent side does not.**
+//! Inserting a nullifier needs nothing but the nullifier, so a replay over any
+//! window produces exact nullifier roots. Deleting a transparent leaf needs the
+//! spent output's full contents — value, script, height, coinbase flag — which
+//! only a genesis-forward replay will have observed. Replaying a window
+//! therefore needs [`block_apply::ApplyOptions::window`], and its transparent
+//! roots are not comparable to a full node's.
+//!
+//! **Nothing here changes what blocks a node accepts.** Phases 0–5 are
+//! consensus-neutral by construction: proofs travel out-of-band from bridge
+//! nodes rather than inside transactions (CLAUDE.md §1, §5 rule 1).
 
+pub mod block_apply;
+pub mod extract;
+pub mod pool;
+
+pub use block_apply::{apply_block, ApplyError, ApplyOptions, ApplyOutcome, StateDelta};
+pub use extract::{summarize_block, BlockSummary, ExtractError, OutPoint};
+pub use pool::{ChainAccumulators, StateCounts};
 pub use zutreexo_accumulator::PoolId;

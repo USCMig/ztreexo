@@ -100,7 +100,7 @@ Status
 |---|---|---|
 | 0 | Spike, baseline measurements, fixture capture | **complete** — measured at mainnet tip 2026-08-12, `docs/benchmarks.md` |
 | 1 | Accumulator core (Utreexo wrapper + IMT) | **complete for the IMT**; transparent side blocked, see below |
-| 2 | Chain state transition + differential harness | not started (naive oracle exists) |
+| 2 | Chain state transition + differential harness | **2a done** — real blocks parse and apply, parser cross-checked against the node; rollback + reorg fuzzing next |
 | 3 | Persistence, snapshots, crash consistency | not started |
 | 4 | Bridge node (proof serving) | not started |
 | 5 | Compact state node + published benchmarks | not started |

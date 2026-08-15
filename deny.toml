@@ -38,6 +38,17 @@ allow = [
 ]
 confidence-threshold = 0.93
 
+# MPL-2.0 is deliberately *not* in the allow list above. It is far weaker than
+# the AGPL case D1 is guarding against — copyleft applies per-file, so merely
+# depending on an MPL crate imposes nothing on this project's licensing — but
+# allowing it wholesale would stop us noticing the next one that appears.
+#
+# `option-ext` arrives transitively: zebra-chain → dirs → dirs-sys → option-ext.
+# We do not modify it, so the file-level obligation never attaches.
+[[licenses.exceptions]]
+name = "option-ext"
+allow = ["MPL-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

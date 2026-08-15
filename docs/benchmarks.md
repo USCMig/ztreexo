@@ -210,13 +210,24 @@ estimate is quoted below.
 
 ### Nullifier IMT — the numbers that matter
 
-All at the default depth of 32.
+At the default depth, which is **40** as of 2026-08-14 (`docs/design.md` D3).
+Depth-32 figures are kept alongside because the depth decision was taken partway
+through and the comparison is the evidence for what it cost.
 
 | Operation | 10⁴ nullifiers | 10⁶ nullifiers | Scaling in set size |
 |---|---|---|---|
-| `insert` | 18.1 µs | 21.1 µs | ~flat |
-| `prove_non_membership` | 1.27 µs | 2.68 µs | `O(log n)` map lookup |
-| `verify_non_membership` | **4.14 µs** | **4.13 µs** | **none** |
+| `insert` (d40) | 22.7 µs | 25.2 µs | ~flat |
+| `prove_non_membership` (d40) | 2.97 µs | 3.03 µs | `O(log n)` map lookup |
+| `verify_non_membership` (d40) | **5.17 µs** | **5.15 µs** | **none** |
+| *`insert` (d32)* | *18.1 µs* | *21.1 µs* | *~flat* |
+| *`prove_non_membership` (d32)* | *1.27 µs* | *2.68 µs* | *`O(log n)`* |
+| *`verify_non_membership` (d32)* | *4.14 µs* | *4.13 µs* | *none* |
+
+Moving from depth 32 to 40 cost +25% on verification and +20% on insertion —
+matching the prediction from the per-level cost, since eight more levels is
+eight more hash compressions. **The flatness survived**, which is the property
+the whole design rests on: verification still does not care how many nullifiers
+exist.
 
 **Verification is flat across a hundred-fold increase in set size.** That is the
 whole design claim on the shielded side, and it is the number Phase 5's headline
