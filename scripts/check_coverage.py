@@ -40,6 +40,14 @@ import sys
 #
 # Keys are repo-relative path suffixes, matched against llvm-cov's absolute
 # filenames, so this works regardless of checkout location.
+# These floors describe **what CI can actually measure**, which is not what a
+# developer's machine measures. Only `fixtures/nu5-orchard.jsonl` is committed;
+# the other three slices are 63 MB and stay gitignored. Every test touching
+# zutreexo-chain is gated on a fixture, so a run with more fixtures present
+# scores higher — block_apply.rs reads 88.37% here and 90.12% with all four.
+#
+# Calibrate against the committed fixture only. Raising a floor to a number seen
+# locally would fail every CI run, which is how these were wrong to begin with.
 FILE_FLOORS: dict[str, dict[str, float]] = {
     # The load-bearing file. CLAUDE.md Phase 1 wants 100% *branch* coverage
     # here. It is at 41/48. The gap is 7 branches — tracked in PLAN.md, and
@@ -47,7 +55,7 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     "crates/zutreexo-accumulator/src/imt.rs": {
         "regions": 96.0,
         "lines": 95.6,
-        "branches": 85.4,
+        "min_branches": 39,  # measured 41/48
     },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average. Two upstream defects
@@ -55,27 +63,75 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     "crates/zutreexo-accumulator/src/proof.rs": {
         "regions": 96.7,
         "lines": 97.6,
-        "branches": 85.0,
-    },
-    # Block application also runs on attacker-supplied data. The floor is low
-    # because the code is new; stage 2b's harness should raise it.
-    "crates/zutreexo-chain/src/block_apply.rs": {
-        "regions": 89.5,
-        "lines": 80.3,
-        "branches": 77.2,
+        "min_branches": 15,  # measured 16-17/20, varies — see below
     },
     # Domain separation is consensus-critical and cheap to cover fully.
     "crates/zutreexo-accumulator/src/hash.rs": {
         "regions": 97.8,
         "lines": 100.0,
     },
+    # The three below are the reason the committed fixture exists. Each one
+    # measured 0.00% before it, because their only tests are fixture-gated.
+    # Floored individually rather than left to the workspace average so that a
+    # fixture going missing fails here, naming the file, instead of showing up
+    # as a diffuse two-point drop in the total.
+    "crates/zutreexo-chain/src/block_apply.rs": {
+        "regions": 88.3,
+        "lines": 78.4,
+        "min_branches": 13,  # measured 15/22
+    },
+    "crates/zutreexo-chain/src/extract.rs": {
+        "regions": 80.4,
+        "lines": 84.7,
+        "min_branches": 2,  # measured 2/2
+    },
+    # Low, and honestly so: much of this is accessors the fixture path does not
+    # reach. Stage 2b's harness raises it.
+    "crates/zutreexo-chain/src/pool.rs": {
+        "regions": 63.9,
+        "lines": 60.2,
+    },
 }
 
+# Measured 93.34 / 92.55 / 83.04 with the committed fixture. Floors sit roughly
+# a third of a point below: the workspace denominator moves whenever any crate
+# gains code, so a hairline margin here fails on changes that improved coverage
+# in absolute terms. The GitHub runner also uses a different nightly build than
+# any developer's, and region attribution shifts slightly between them.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 94.2,
-    "lines": 93.4,
-    "branches": 84.8,
+    "regions": 93.0,
+    "lines": 92.2,
+    # Percentage, not a count: the workspace denominator grows as code is added,
+    # so an absolute floor here would have to be edited on every commit. Carries
+    # extra tolerance for the branch jitter described below.
+    "branches": 81.5,
 }
+
+# ---------------------------------------------------------------------------
+# Why branch floors are absolute counts while region and line floors are
+# percentages.
+#
+# Branch coverage here is **not deterministic between runs**. The property
+# suites drive `proof.rs` and `imt.rs` with proptest, which seeds a fresh RNG
+# on every run, so which bounds-check branches get exercised varies. Measured
+# back to back on identical source, `proof.rs` reported 17/20 and then 16/20
+# — while its region and line coverage were byte-identical at 96.70% and
+# 97.70% both times. Regions and lines are stable; branches are not.
+#
+# On a 20-branch denominator a single branch is five percentage points, so a
+# zero-tolerance percentage ratchet on branches would fail CI at random. That
+# is worse than no check: a gate that cries wolf gets switched off, and it
+# would take the stable region and line ratchets down with it.
+#
+# So branch floors are absolute covered-counts set about two branches below the
+# observed minimum, which absorbs the jitter while still catching a real
+# regression — losing three or more branches is not noise. Region and line
+# floors stay strict, because they have been verified stable across runs.
+#
+# If branch coverage is ever needed as a hard gate (CLAUDE.md Phase 1 asks for
+# 100% on imt.rs), the fix is to make the run deterministic — a fixed proptest
+# seed, or a separate non-randomised suite — not to tighten these numbers.
+# ---------------------------------------------------------------------------
 
 
 def percent(summary: dict, key: str) -> float | None:
@@ -93,6 +149,31 @@ def percent(summary: dict, key: str) -> float | None:
         return None
     value = block.get("percent")
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def unexercised(summary: dict) -> bool:
+    """True when the file was compiled but no test ever entered it.
+
+    Distinguishing this from "poorly covered" matters, because the cause and the
+    fix are completely different. A file at 40% needs more tests written. A file
+    at *exactly* zero regions and zero functions was never reached at all, which
+    in this repo has one overwhelmingly likely cause: every test that touches
+    `zutreexo-chain` is gated on a fixture being present, and `fixtures/*.jsonl`
+    is gitignored.
+
+    Reporting that as "0.00% below floor 89.50%" reads as a coverage regression
+    and sends you looking for the wrong thing. It happened, and it cost real
+    time, so the tool says which it is.
+    """
+    for key in ("regions", "functions"):
+        block = summary.get(key)
+        if not isinstance(block, dict):
+            return False
+        if not block.get("count"):
+            return False
+        if block.get("covered"):
+            return False
+    return True
 
 
 def main(argv: list[str]) -> int:
@@ -125,8 +206,24 @@ def main(argv: list[str]) -> int:
                 continue
             matched.add(suffix)
 
+            # Diagnose "never ran" before comparing against floors, so the
+            # message names the cause instead of three derived symptoms.
+            if unexercised(summary):
+                failures.append(
+                    f"{suffix}: NEVER EXECUTED (0 of "
+                    f"{summary['regions']['count']} regions, 0 of "
+                    f"{summary['functions']['count']} functions).\n"
+                    f"      This is a missing test environment, not a coverage "
+                    f"regression. Every test touching zutreexo-chain is gated "
+                    f"on a fixture;\n"
+                    f"      check that fixtures/nu5-orchard.jsonl is present — "
+                    f"the other slices are gitignored by design."
+                )
+                print(f"  {suffix}: NEVER EXECUTED")
+                continue
+
             reported = []
-            for metric in ("regions", "lines", "functions", "branches"):
+            for metric in ("regions", "lines", "functions"):
                 actual = percent(summary, metric)
                 if actual is None:
                     reported.append(f"{metric} n/a")
@@ -135,13 +232,34 @@ def main(argv: list[str]) -> int:
                 floor = floors.get(metric)
                 if floor is not None and actual + 1e-9 < floor:
                     failures.append(
-                        f"{suffix}: {metric} {actual:.2f}% "
-                        f"below floor {floor:.2f}%"
+                        f"{suffix}: {metric} {actual:.2f}% below floor {floor:.2f}%"
+                    )
+
+            # Branches: absolute counts, for the jitter reason documented above.
+            block = summary.get("branches") or {}
+            total = block.get("count") or 0
+            covered = block.get("covered") or 0
+            if total:
+                reported.append(f"branches {covered}/{total}")
+                minimum = floors.get("min_branches")
+                if minimum is not None and covered < minimum:
+                    failures.append(
+                        f"{suffix}: {covered}/{total} branches covered, "
+                        f"floor is {int(minimum)}"
+                    )
+            else:
+                reported.append("branches n/a")
+                if "min_branches" in floors:
+                    failures.append(
+                        f"{suffix}: floor set on 'min_branches', "
+                        f"but llvm-cov reports no branch data"
                     )
 
             # A floor on a metric the file does not report would silently never
             # fire, so say so rather than passing quietly.
             for metric in floors:
+                if metric == "min_branches":
+                    continue
                 if percent(summary, metric) is None:
                     failures.append(
                         f"{suffix}: floor set on '{metric}', "

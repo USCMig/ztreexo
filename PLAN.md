@@ -67,6 +67,40 @@ right way to read it rather than as a percentage.
 so coverage can only improve; the CI job runs on nightly for the same reason.
 Closing the seven branches is tracked separately and is not blocking stage 2b.
 
+**CI had never executed the `zutreexo-chain` crate, and nobody noticed.**
+Discovered 2026-08-16 when the coverage job first ran on GitHub. Every test that
+touches that crate is gated on a fixture being present, and `fixtures/*.jsonl`
+was entirely gitignored — 65 MB of raw block hex that never reaches a runner.
+So the tests skipped, silently and greenly, exactly as written.
+
+Measured effect:
+
+| | no fixtures (what CI did) | committed fixture | all four, local |
+|---|---|---|---|
+| `block_apply.rs` | **0.00%** | 88.37% | 90.12% |
+| `extract.rs` | **0.00%** | 80.49% | 90.85% |
+| `chain/pool.rs` | **0.00%** | 63.96% | 74.77% |
+| workspace | 74.50% | 93.34% | 93.62% |
+
+Fixed by committing `fixtures/nu5-orchard.jsonl` — at 1.85 MB the smallest
+slice, and it recovers 18 of the 19.1 available points for 2.8% of the bytes.
+The rest stay ignored; `ironwood-activation` alone is 59.3 MB because those
+blocks average 89.6 KB. Those three now earn their place as differential
+breadth — Sprout activity, sandblasting's pathological output counts,
+Ironwood — rather than as coverage, and run locally and in the nightly sweep.
+
+Two lessons folded back into the tooling. `check_coverage.py` now reports a file
+at zero regions *and* zero functions as **NEVER EXECUTED** with the fixture
+named, because reading it as "0.00% below floor 89.50%" sends you looking for a
+coverage regression that is not there. And every floored file in
+`zutreexo-chain` is floored individually, so a fixture going missing again fails
+by name rather than as a diffuse drop in the workspace total.
+
+**Coverage floors describe what CI can measure, not what a laptop can.** A local
+run with all four fixtures scores higher than CI ever will. Calibrate against
+the committed fixture only — raising a floor to a locally-observed number fails
+every CI run, which is precisely how these were wrong to begin with.
+
 **The transparent side is blocked upstream.** `rustreexo` 0.6.0 generates
 invalid inclusion proofs for any leaf whose sibling has been deleted, reproduced
 with stock upstream types. Pinned in
