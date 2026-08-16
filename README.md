@@ -99,7 +99,7 @@ Status
 | Phase | | Status |
 |---|---|---|
 | 0 | Spike, baseline measurements, fixture capture | **complete** — measured at mainnet tip 2026-08-12, `docs/benchmarks.md` |
-| 1 | Accumulator core (Utreexo wrapper + IMT) | **complete for the IMT**; transparent side blocked, see below |
+| 1 | Accumulator core (Utreexo wrapper + IMT) | **complete for the IMT**; transparent side blocked, see below. One DoD item unmet: `imt.rs` branch coverage is 41/48, not the required 100% — `PLAN.md` |
 | 2 | Chain state transition + differential harness | **2a done** — real blocks parse and apply, parser cross-checked against the node; rollback + reorg fuzzing next |
 | 3 | Persistence, snapshots, crash consistency | not started |
 | 4 | Bridge node (proof serving) | not started |
@@ -122,7 +122,8 @@ which fails loudly if upstream fixes it. Analysis and options in
 but BLAKE2b.
 
 Decisions taken so far, with reasoning, are in `docs/design.md`. The phased plan
-with per-phase definitions of done is in `CLAUDE.md`.
+with per-phase definitions of done is in `CLAUDE.md`. Current status, branch
+naming, and the gaps being carried deliberately are in `PLAN.md`.
 
 Build and test
 
