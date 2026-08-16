@@ -92,6 +92,13 @@ The validator's own treestate — catches parsing bugs, where both models agree 
 
 Three comparison tiers: counts every block, incremental-vs-cold-rebuild roots every N blocks, validator cross-check at checkpoints. The cold rebuild is the load-bearing one — it catches drift, which accumulates silently over a million-block replay and surfaces only when someone cannot spend.
 
+All three are implemented and all four fixture slices pass. Each tier is proven to fire by fault injection rather than assumed to work: corruptions go into the implementation's input only, while the oracle still sees the truth, so an injected fault is indistinguishable from a real bug.
+
+Two of those tests carry the argument, and each has a paired test proving the *other* tiers are blind to it:
+
+- **Reordering nullifiers within a pool.** Counts are unchanged, so tier 1 cannot see it; only leaf indices move, which changes the root. Tier 2 catches it. That is what justifies the cost of a cold rebuild.
+- **Undercounting a note commitment.** Commitments are counted and never accumulated, so they touch no root and no compared count — and both local oracles are fed from the same parse, so neither can notice. Only the node's own answer disagrees. That is what justifies tier 3.
+
 Plus reorg fuzzing, which is where accumulator implementations actually break: Utreexo deletion is not naturally invertible, so undo needs the deleted leaves and their positions, and it is easy to keep almost enough. The invariant is byte-identical roots or failure — never "equivalent", never "same balance".
 
 Status
@@ -100,7 +107,7 @@ Status
 |---|---|---|
 | 0 | Spike, baseline measurements, fixture capture | **complete** — measured at mainnet tip 2026-08-12, `docs/benchmarks.md` |
 | 1 | Accumulator core (Utreexo wrapper + IMT) | **complete for the IMT**; transparent side blocked, see below. One DoD item unmet: `imt.rs` branch coverage is 41/48, not the required 100% — `PLAN.md` |
-| 2 | Chain state transition + differential harness | **2a done** — real blocks parse and apply, parser cross-checked against the node; rollback + reorg fuzzing next |
+| 2 | Chain state transition + differential harness | **2a and 2b done** — real blocks parse and apply; all four fixture slices agree with an independent oracle and with `zebrad`; rollback + reorg fuzzing next |
 | 3 | Persistence, snapshots, crash consistency | not started |
 | 4 | Bridge node (proof serving) | not started |
 | 5 | Compact state node + published benchmarks | not started |

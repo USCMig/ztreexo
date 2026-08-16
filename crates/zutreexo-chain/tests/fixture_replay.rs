@@ -20,6 +20,20 @@
 //!
 //! So: nullifier roots and counts are checked properly. Transparent coverage
 //! waits for the genesis-forward replay in stage 2d.
+//!
+//! # Why this still exists alongside the stage 2b harness
+//!
+//! `zutreexo-testkit`'s `tests/harness_replay.rs` replays the same slices
+//! against two oracles and subsumes most of what is here. It is kept because it
+//! tests something the harness structurally cannot: `apply_block` **at depth
+//! 32**, close to the production depth of 40.
+//!
+//! The harness is capped near depth 14, because its oracle materialises
+//! `2^depth` leaves and refuses to walk a sparse path — the cleverness it
+//! refuses is exactly what would let it share the implementation's bugs. That
+//! trade is right for an oracle and it means the harness never exercises a deep
+//! tree. This file does, without an oracle. The two are complementary, and
+//! neither alone covers both.
 
 // `panic` is allowed here because these helpers run outside `#[test]` bodies,
 // where clippy's test exemption does not reach. A malformed fixture is an

@@ -3374,7 +3374,6 @@ dependencies = [
  "thiserror 2.0.20",
  "zebra-chain",
  "zutreexo-accumulator",
- "zutreexo-testkit",
 ]
 
 [[package]]
@@ -3392,5 +3391,9 @@ dependencies = [
  "blake2b_simd",
  "hex",
  "proptest",
+ "serde_json",
+ "thiserror 2.0.20",
+ "zebra-chain",
  "zutreexo-accumulator",
+ "zutreexo-chain",
 ]

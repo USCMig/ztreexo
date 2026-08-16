@@ -26,8 +26,8 @@ from __future__ import annotations
 import json
 import sys
 
-# Measured 2026-08-16 with `cargo +nightly llvm-cov --workspace --branch`.
-# Raise when coverage improves; never lower one without saying why in the PR.
+# Measured with `cargo +nightly llvm-cov --workspace --branch`. Raise when
+# coverage improves; never lower one without saying why in the PR.
 #
 # Floors sit at the measured value truncated to one decimal. That buffer is
 # deliberate: `--branch` instrumentation shifts region counts slightly between
@@ -40,6 +40,7 @@ import sys
 #
 # Keys are repo-relative path suffixes, matched against llvm-cov's absolute
 # filenames, so this works regardless of checkout location.
+#
 # These floors describe **what CI can actually measure**, which is not what a
 # developer's machine measures. Only `fixtures/nu5-orchard.jsonl` is committed;
 # the other three slices are 63 MB and stay gitignored. Every test touching
@@ -80,31 +81,59 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 78.4,
         "min_branches": 13,  # measured 15/22
     },
+    # Raised in 2b from 80.4/84.7: the harness drives extraction over the same
+    # slice with both oracles, reaching paths the bare fixture replay did not.
     "crates/zutreexo-chain/src/extract.rs": {
-        "regions": 80.4,
-        "lines": 84.7,
+        "regions": 84.7,
+        "lines": 88.0,
         "min_branches": 2,  # measured 2/2
     },
-    # Low, and honestly so: much of this is accessors the fixture path does not
-    # reach. Stage 2b's harness raises it.
+    # Raised in 2b from 63.9/60.2 for the same reason. Still the lowest floor
+    # here: much of the remainder is accessors no replay path reaches.
     "crates/zutreexo-chain/src/pool.rs": {
-        "regions": 63.9,
-        "lines": 60.2,
+        "regions": 74.7,
+        "lines": 69.8,
+    },
+    # The differential harness. It is test infrastructure, but it is also the
+    # project's primary correctness signal (CLAUDE.md §5 rule 2), so a silent
+    # regression in it would disable the thing that catches everything else.
+    # The uncovered remainder is mostly repro-write failure paths.
+    "crates/zutreexo-testkit/src/harness.rs": {
+        "regions": 80.2,
+        "lines": 80.5,
+        "min_branches": 32,  # measured 34/52
+    },
+    # The oracles themselves. If these rot, every tier built on them weakens
+    # without anything going red.
+    "crates/zutreexo-testkit/src/state.rs": {
+        "regions": 96.6,
+        "lines": 93.4,
+        "min_branches": 11,  # measured 13/14
+    },
+    "crates/zutreexo-testkit/src/checkpoints.rs": {
+        "regions": 95.4,
+        "lines": 97.3,
     },
 }
 
-# Measured 93.34 / 92.55 / 83.04 with the committed fixture. Floors sit roughly
-# a third of a point below: the workspace denominator moves whenever any crate
-# gains code, so a hairline margin here fails on changes that improved coverage
-# in absolute terms. The GitHub runner also uses a different nightly build than
-# any developer's, and region attribution shifts slightly between them.
+# Floors sit roughly a third of a point below the measured value: the workspace
+# denominator moves whenever any crate gains code, so a hairline margin here
+# fails on changes that improved coverage in absolute terms. The GitHub runner
+# also uses a different nightly build than any developer's, and region
+# attribution shifts slightly between them.
+# Measured 92.50 / 91.61 / 78.65 in the CI profile at stage 2b. Lower than the
+# 93.34 / 92.55 / 83.04 of the previous commit, and that is expected rather than
+# a regression: 2b adds roughly a thousand lines of harness, whose error paths
+# are less exercised than the accumulator's, and it grows the branch denominator
+# from 112 to 178. The per-file floors above are what stop that dilution hiding
+# a real drop in any one file.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 93.0,
-    "lines": 92.2,
+    "regions": 92.1,
+    "lines": 91.2,
     # Percentage, not a count: the workspace denominator grows as code is added,
     # so an absolute floor here would have to be edited on every commit. Carries
     # extra tolerance for the branch jitter described below.
-    "branches": 81.5,
+    "branches": 77.0,
 }
 
 # ---------------------------------------------------------------------------

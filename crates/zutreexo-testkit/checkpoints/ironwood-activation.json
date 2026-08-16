@@ -1,0 +1,21 @@
+{
+  "blocks": 200,
+  "captured_utc": "2026-08-16",
+  "end_height": 3428342,
+  "slice": "ironwood-activation",
+  "source": "zebrad getblock <height> 2",
+  "start_height": 3428143,
+  "totals": {
+    "ironwood_commitments": 1828,
+    "ironwood_nullifiers": 1828,
+    "orchard_commitments": 5838,
+    "orchard_nullifiers": 5838,
+    "sapling_commitments": 50,
+    "sapling_nullifiers": 28,
+    "sprout_commitments": 0,
+    "sprout_nullifiers": 0,
+    "transactions": 1491,
+    "transparent_creates": 897,
+    "transparent_spends": 515
+  }
+}

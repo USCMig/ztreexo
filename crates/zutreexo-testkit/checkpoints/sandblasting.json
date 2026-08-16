@@ -1,0 +1,21 @@
+{
+  "blocks": 200,
+  "captured_utc": "2026-08-16",
+  "end_height": 1700199,
+  "slice": "sandblasting",
+  "source": "zebrad getblock <height> 2",
+  "start_height": 1700000,
+  "totals": {
+    "ironwood_commitments": 0,
+    "ironwood_nullifiers": 0,
+    "orchard_commitments": 0,
+    "orchard_nullifiers": 0,
+    "sapling_commitments": 110,
+    "sapling_nullifiers": 65,
+    "sprout_commitments": 0,
+    "sprout_nullifiers": 0,
+    "transactions": 526,
+    "transparent_creates": 4925,
+    "transparent_spends": 2870
+  }
+}

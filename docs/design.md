@@ -418,6 +418,109 @@ overflow in consensus code is a bug, not a wrapping convenience.
 
 ---
 
+## D14 — The oracles' independence is enforced by a test, not by structure
+
+**Stage 2b.**
+
+CLAUDE.md Phase 2 requires the naive model to share **zero code** with the
+implementation, so the two cannot be wrong in the same way. Nothing in Rust
+enforces that. `zutreexo-testkit` must depend on `zutreexo-chain` — `harness`
+drives the replay and has to reach the code under test — so the dependency graph
+permits an import from `naive.rs` or `state.rs` that would quietly destroy the
+oracle's value, and the suite would stay green.
+
+`tests/independence.rs` therefore reads those two files **as text** and fails if
+either mentions `zutreexo_accumulator` or `zutreexo_chain` in code. Comments are
+stripped first, so the module docs can explain the rule without violating it.
+
+This is crude, and it is the right instrument: the property is textual, so it
+should be checked textually rather than trusted to review. The alternative —
+a separate crate that cannot express the dependency — was rejected because the
+oracle and the harness that drives it belong together for readability, and a
+crate boundary would be one more thing to get around.
+
+---
+
+## D15 — No independent naive Utreexo; the transparent oracle is weaker, and says so
+
+**Stage 2b.**
+
+The shielded side has a genuine second implementation. The transparent side does
+not, and the asymmetry is deliberate.
+
+A Utreexo root depends on the entire history of insertions and deletions rather
+than on current membership, so "recompute cold from the current set" is not even
+well-defined — a from-scratch oracle would mean reimplementing the forest,
+including whichever deletion variant (original or swapless) upstream chose.
+Getting that wrong produces *false* divergences, and an oracle that cries wolf
+is worse than no oracle: it trains people to dismiss the thing that is supposed
+to be the primary correctness signal.
+
+So `NaiveState` tracks which outpoints are unspent, which is enough for the
+count tier, and claims nothing more. Combined with the transparent side being
+blocked upstream anyway (D10), the effort is better spent elsewhere.
+
+What partially covers the gap instead: tier 3 now cross-checks
+`transparent_spends` and `transparent_creates` against zebrad's own JSON across
+all four fixture slices, which the transparent side previously had no check of
+at all.
+
+Revisit if D10 is resolved and the transparent forest becomes load-bearing.
+
+---
+
+## D17 — Every tier is proven to fire, and proven to be the only one that does
+
+**Stage 2b.**
+
+A harness that has never caught anything is unproven, and a *tier* that has
+never caught anything is dead weight that looks like coverage. So each tier has
+a fault injected into the implementation's input — the oracle still sees the
+truth, making the fault indistinguishable from a real bug — plus a paired test
+showing the other tiers cannot see it. Without the pairing, a test proves only
+that *something* fired, not that the expensive tier was needed.
+
+| Fault | Caught by | Blind |
+|---|---|---|
+| drop a nullifier | tier 1 | — |
+| drop an output | tier 1 | — |
+| reorder nullifiers within a pool | **tier 2** | tier 1 (counts unchanged) |
+| undercount a note commitment | **tier 3** | tiers 1 and 2 |
+
+The last row was added after coverage measurement showed
+`compare_checkpoint`'s mismatch branch had never executed — tier 3 was asserted
+to work and never demonstrated. Commitments are counted but never accumulated,
+so they reach no root and no compared count, and both local oracles are fed from
+the same parse. Only the node's independently-derived answer disagrees, which is
+exactly the bug class tier 3 exists for.
+
+One consequence for the implementation: `Report::totals` accumulates from what
+the implementation *saw*, not from the pristine parse. Reading the untouched
+summary there would have made tier 3 structurally incapable of detecting a
+parsing bug — the only thing it is for.
+
+---
+
+## D16 — Tier 2's cost is tuned down by default, not left at its strictest
+
+**Stage 2b.**
+
+A cold root rebuild costs about `2^(depth+1)` hashes per pool per check. At
+depth 14 checking after every block, the four fixture slices come to roughly
+10⁸ hashes — 18 seconds in release, but `cargo test` builds unoptimised, and it
+turned the per-push job into a twenty-minute one.
+
+The default is therefore depth 12 with a rebuild every 10 blocks, and the
+nightly sweep runs depth 14 with a rebuild after every block. Both are
+controlled by `ZUTREEXO_HARNESS_DEPTH` and `ZUTREEXO_ROOT_CHECK_EVERY`.
+
+The reasoning is that a check slow enough to be skipped protects nothing. The
+strict setting still runs every night and on demand, and the test asserts the
+*exact* number of rebuilds performed, so a tier that silently stopped running
+fails rather than passing quietly.
+
+---
+
 ## Open questions not yet answered
 
 These are CLAUDE.md §7 items that Phase 1 could not resolve, carried forward.

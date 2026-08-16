@@ -1,0 +1,21 @@
+{
+  "blocks": 200,
+  "captured_utc": "2026-08-16",
+  "end_height": 1687303,
+  "slice": "nu5-orchard",
+  "source": "zebrad getblock <height> 2",
+  "start_height": 1687104,
+  "totals": {
+    "ironwood_commitments": 0,
+    "ironwood_nullifiers": 0,
+    "orchard_commitments": 31,
+    "orchard_nullifiers": 31,
+    "sapling_commitments": 138,
+    "sapling_nullifiers": 155,
+    "sprout_commitments": 0,
+    "sprout_nullifiers": 0,
+    "transactions": 457,
+    "transparent_creates": 4481,
+    "transparent_spends": 805
+  }
+}
