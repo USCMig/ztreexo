@@ -32,7 +32,7 @@ infrastructure, `fix/<topic>` for defects.
 | 0 | Baseline measurement, fixture capture | — | **complete** — mainnet tip 2026-08-12, [`docs/benchmarks.md`](docs/benchmarks.md) |
 | 1 | Accumulator core: Utreexo wrapper + IMT | — | **complete for the IMT**; transparent side blocked upstream, and one DoD item unmet (below) |
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
-| 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **in progress** |
+| 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | not started |
 | 2d | Genesis-forward replay | `phase-2d-replay` | not started |
 | 3 | Persistence, snapshots, crash consistency | — | not started |
@@ -63,9 +63,24 @@ The region figure was flattering it. The real gap against the DoD is **7
 uncovered branches** — which is small enough to close deliberately, and is the
 right way to read it rather than as a percentage.
 
-`scripts/check_coverage.py` now enforces per-file floors at the measured values,
-so coverage can only improve; the CI job runs on nightly for the same reason.
-Closing the seven branches is tracked separately and is not blocking stage 2b.
+`scripts/check_coverage.py` enforces per-file floors so coverage can only
+improve, and the CI job runs on nightly for the same reason.
+
+**Branch coverage is not reproducible between runs**, which constrains how hard
+that gate can be pushed. The property suites drive `proof.rs` and `imt.rs`
+through proptest, which seeds a fresh RNG each run, so which bounds-check
+branches get exercised varies: measured back to back on identical source,
+`proof.rs` reported 17/20 and then 16/20, while its region and line coverage
+were byte-identical both times. On a 20-branch denominator one branch is five
+percentage points, so a zero-tolerance branch ratchet would fail CI at random —
+and a gate that cries wolf gets switched off, taking the stable region and line
+ratchets with it. Branch floors are therefore absolute covered-counts set about
+two branches below the observed minimum; regions and lines stay strict.
+
+**Making the Phase 1 DoD enforceable therefore needs a deterministic run**, not
+a tighter threshold: a fixed proptest seed, or a separate non-randomised suite
+for `imt.rs`. That is the actual prerequisite for closing the seven branches,
+and it is not blocking stage 2b.
 
 **CI had never executed the `zutreexo-chain` crate, and nobody noticed.**
 Discovered 2026-08-16 when the coverage job first ran on GitHub. Every test that
@@ -111,21 +126,37 @@ which fails loudly if upstream fixes it. Analysis in
 **Tier 2 of the harness cannot run at `DEFAULT_DEPTH`.** The naive oracle
 materialises all `2^depth` leaves by design — walking a sparse path is exactly
 the cleverness that would let it share the accumulator's bugs — so
-`MAX_NAIVE_DEPTH` is 16. Differential replay therefore runs at depth 16, which
-is sound because depth is a parameter and structural agreement at 16 is the same
-statement as at 40. The consequence lands on **2d**: 2^16 leaves is roughly
-65,000 nullifiers, about 7,000 blocks at current rates, so a genesis-forward
-replay cannot carry tier 2 across its whole span. 2d needs a different strategy
-for that tier — windowed cold rebuilds, or an oracle that is sparse without
-becoming clever.
+`MAX_NAIVE_DEPTH` is 16. Differential replay runs at depth 14, which is sound
+because depth is a parameter and structural agreement at 14 is the same
+statement as at 40.
+
+Depth 14 is a floor, not a preference: capacity is `2^depth` leaves **per
+pool**, and the Ironwood slice alone reveals 5,838 Orchard nullifiers in 200
+blocks. At depth 12 the Orchard tree fills at block 130 and both sides begin
+rejecting in lockstep — agreement rather than divergence, so not an error, and
+it initially looked like a clean short pass. The harness now reports a truncated
+replay explicitly and a test pins that behaviour.
+
+Two consequences carry forward:
+
+* **On 2d.** Even 2^16 is only about 65,000 nullifiers, roughly 7,000 blocks at
+  current rates, so a genesis-forward replay cannot carry tier 2 across its
+  whole span. 2d needs windowed cold rebuilds, or an oracle that is sparse
+  without becoming clever.
+* **On cost.** The oracle rebuilds successor pointers by linear search, so a
+  cold root is `O(n²)` in accumulated nullifiers — that, not tree depth,
+  dominates runtime. Hence the default of a rebuild every 10 blocks with the
+  strict every-block setting moved to the nightly sweep; see `docs/design.md`
+  D16.
 
 **No independent naive Utreexo.** The shielded side has a true second
-implementation; the transparent side does not. Its cold-rebuild tier replays the
-op log through a second `rustreexo` instance, which catches state corruption and
-drift in the long-lived instance but *shares code*, so it cannot catch an
-algorithm bug. Building a genuine independent forest means bit-matching whichever
-deletion variant upstream implements, and getting that wrong yields false
-divergences. Deferred while the transparent side is blocked anyway.
+implementation; the transparent side has only an unspent-outpoint set, which
+feeds the count tier and nothing more. A genuine independent forest would mean
+bit-matching whichever deletion variant upstream implements, and getting that
+wrong yields false divergences — an oracle that cries wolf is worse than none.
+Deferred while the transparent side is blocked anyway; see `docs/design.md` D15.
+Partially offset by tier 3, which now cross-checks transparent spend and output
+counts against the node across all four slices.
 
 ## Ordering constraints
 

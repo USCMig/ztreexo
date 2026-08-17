@@ -116,3 +116,16 @@ jobs:
         run: >
           cargo test --release --workspace --locked
           --test properties --test differential
+
+      # The differential harness at its strictest: a cold root rebuild after
+      # *every* block, at a deeper tree. Roughly 10^8 hashes, which is why the
+      # per-push job runs a cheaper setting — a check slow enough to be skipped
+      # protects nothing. Fixtures are gitignored, so this only does real work
+      # on a runner that has them; it stays green and says so otherwise.
+      - name: Differential harness, strict
+        env:
+          ZUTREEXO_HARNESS_DEPTH: "14"
+          ZUTREEXO_ROOT_CHECK_EVERY: "1"
+        run: >
+          cargo test --release --workspace --locked
+          --test harness_replay --test corpus -- --nocapture

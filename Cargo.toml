@@ -41,6 +41,10 @@ criterion = "0.8"
 hex = "0.4"
 proptest = "1.11"
 
+# Checkpoint files and repro dumps only. Already in the tree via zebra-chain,
+# so this adds no new licence surface.
+serde_json = "1.0"
+
 # Lints applied to every crate in the workspace. See CLAUDE.md §5 rule 3: no
 # unwrap/panic in accumulator or apply paths, because a panic in block
 # application is a remote crash vector. `clippy.toml` exempts test code, where

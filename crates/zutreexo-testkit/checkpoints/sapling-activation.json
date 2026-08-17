@@ -1,0 +1,21 @@
+{
+  "blocks": 200,
+  "captured_utc": "2026-08-16",
+  "end_height": 419399,
+  "slice": "sapling-activation",
+  "source": "zebrad getblock <height> 2",
+  "start_height": 419200,
+  "totals": {
+    "ironwood_commitments": 0,
+    "ironwood_nullifiers": 0,
+    "orchard_commitments": 0,
+    "orchard_nullifiers": 0,
+    "sapling_commitments": 101,
+    "sapling_nullifiers": 36,
+    "sprout_commitments": 452,
+    "sprout_nullifiers": 452,
+    "transactions": 1299,
+    "transparent_creates": 14642,
+    "transparent_spends": 5396
+  }
+}

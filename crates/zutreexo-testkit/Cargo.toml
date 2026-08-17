@@ -10,10 +10,19 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-# The naive oracle depends on blake2b_simd directly and *not* on
-# zutreexo-accumulator's hashing. See crates/zutreexo-testkit/src/naive.rs.
+# The naive oracles depend on blake2b_simd directly and *not* on
+# zutreexo-accumulator's hashing. See src/naive.rs and src/state.rs.
+#
+# The crates below are dependencies of `harness`, which drives the replay and
+# therefore must reach the code under test. That the oracle modules sit in the
+# same crate is a hazard, not a licence: `tests/independence.rs` reads them as
+# text and fails if either mentions a crate it is supposed to be independent of.
 blake2b_simd.workspace = true
 hex.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zebra-chain.workspace = true
+zutreexo-chain.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
