@@ -202,6 +202,29 @@ pub enum ImtError {
     #[error("low leaf does not bracket the value")]
     LowLeafDoesNotCover,
 
+    /// Undo was attempted on something other than the newest insertion.
+    ///
+    /// Undo is strictly last-in-first-out. Anything else would leave the linked
+    /// list pointing at an index that no longer holds what the pointer claims,
+    /// producing a tree that hashes to a plausible root while encoding a set
+    /// nobody can reason about.
+    #[error("undo is LIFO: asked for leaf {asked}, newest is {newest}")]
+    NotMostRecent {
+        /// Leaf index the caller tried to undo.
+        asked: u64,
+        /// Index of the newest leaf, the only undoable one.
+        newest: u64,
+    },
+
+    /// The insertion proof does not describe this tree's current state.
+    ///
+    /// Raised when the leaf at the appended position is not the value being
+    /// undone, when the low leaf no longer points at it, or when restoring the
+    /// low leaf would leave a gap in the linked list. Each of those means the
+    /// proof came from a different tree or a different point in its history.
+    #[error("insertion proof does not match the current tree state")]
+    ProofMismatch,
+
     /// The recomputed root disagrees with the expected one.
     #[error("root mismatch")]
     RootMismatch {
@@ -738,6 +761,137 @@ impl IndexedMerkleTree {
         })
     }
 
+    /// Reverses the most recent [`IndexedMerkleTree::insert`].
+    ///
+    /// # Why this is possible here and not for the transparent forest
+    ///
+    /// An indexed Merkle tree insertion touches exactly two leaves — the low
+    /// leaf, rewritten to point at the new value, and the appended leaf — and
+    /// [`InsertionProof`] carries the low leaf *as it stood before* the
+    /// rewrite. That is the whole pre-image, so the operation inverts exactly.
+    ///
+    /// A Utreexo deletion does not: `rustreexo` offers no way to reinsert a
+    /// leaf at its former position, so the transparent side needs a snapshot
+    /// rather than a delta. See `zutreexo-chain`'s `rollback` module.
+    ///
+    /// # Undo is strictly last-in-first-out
+    ///
+    /// Only the newest insertion can be undone, and this rejects anything else
+    /// rather than attempting it. Undoing out of order would leave the linked
+    /// list pointing at a leaf index that no longer holds what the pointer
+    /// claims — a tree that still hashes to a valid-looking root while encoding
+    /// a set nobody can reason about. A reorg unwinds blocks newest-first and
+    /// nullifiers within a block in reverse, which satisfies this naturally.
+    ///
+    /// On any error the tree is left untouched.
+    pub fn undo_insert(&mut self, value: Value, proof: &InsertionProof) -> Result<(), ImtError> {
+        // ---- checks, all before any mutation ----
+
+        if value.is_zero() {
+            return Err(ImtError::ReservedValue);
+        }
+
+        // The appended leaf must be the last one. `leaf_count` is never zero:
+        // index 0 is the sentinel, which is not undoable.
+        let last_index = self
+            .leaf_count()
+            .checked_sub(1)
+            .ok_or(ImtError::CorruptTree("tree has no sentinel"))?;
+        if proof.new_leaf_index != last_index || last_index == 0 {
+            return Err(ImtError::NotMostRecent {
+                asked: proof.new_leaf_index,
+                newest: last_index,
+            });
+        }
+
+        // The leaf actually sitting there must be the one being undone,
+        // otherwise the proof belongs to a different insertion.
+        let appended = self
+            .leaf(last_index)
+            .ok_or(ImtError::CorruptTree("leaf_count exceeds the leaf vector"))?;
+        if appended.value != value {
+            return Err(ImtError::ProofMismatch);
+        }
+
+        // The low leaf must currently point at the value being removed. If it
+        // does not, this proof was produced against a different tree state.
+        let current_low = self
+            .leaf(proof.low_leaf_index)
+            .ok_or(ImtError::CorruptTree("low leaf index out of range"))?;
+        if current_low.next_value != value || current_low.next_index != proof.new_leaf_index {
+            return Err(ImtError::ProofMismatch);
+        }
+
+        // ...and it must be the *same* low leaf. Insertion rewrites only
+        // `next_value` and `next_index`, never the leaf's own value, so a proof
+        // whose low leaf disagrees here came from a different tree.
+        //
+        // Checking the successor alone is not enough, and this is not a
+        // theoretical gap: two trees whose newest leaf happens to be the same
+        // value, inserted at the same index, with the same (often empty)
+        // successor, agree on every other field. Restoring then silently
+        // rewrites a live nullifier to a value from the other tree — a
+        // corruption that still hashes to a well-formed root. Found by
+        // `undo_with_a_proof_from_another_tree_is_refused`.
+        if current_low.value != proof.low_leaf.value {
+            return Err(ImtError::ProofMismatch);
+        }
+
+        // Restoring the low leaf must re-link it to what the appended leaf
+        // points at, or the list would develop a gap.
+        if proof.low_leaf.next_value != appended.next_value
+            || proof.low_leaf.next_index != appended.next_index
+        {
+            return Err(ImtError::ProofMismatch);
+        }
+
+        // ---- mutation: from here nothing may fail ----
+        //
+        // Exactly the reverse of `insert`, which writes the low leaf and then
+        // appends. The two paths can share ancestors, so both writes must
+        // happen; doing them in reverse order keeps the intermediate states
+        // mirror-images of the forward ones.
+
+        self.leaves.pop();
+        self.index_by_value.remove(&value);
+        self.clear_leaf(last_index);
+
+        self.set_leaf(proof.low_leaf_index, proof.low_leaf)?;
+
+        Ok(())
+    }
+
+    /// Returns a leaf position to empty and rehashes the path above it.
+    ///
+    /// The mirror of [`IndexedMerkleTree::write_leaf`]: that writes a leaf
+    /// digest upward, this writes the empty-subtree digest upward. Removing the
+    /// node entry rather than storing a zero keeps `nodes` sparse, so an undone
+    /// insertion leaves a tree byte-identical to one that never saw it — which
+    /// is the property the reorg invariant rests on.
+    fn clear_leaf(&mut self, index: u64) {
+        self.nodes.remove(&(0, index));
+
+        let mut node = self.zero(0);
+        let mut idx = index;
+        for level in 0..self.depth {
+            let sibling = self.node(level, idx ^ 1);
+            node = if idx & 1 == 0 {
+                hash::imt_node(self.pool, &node, &sibling)
+            } else {
+                hash::imt_node(self.pool, &sibling, &node)
+            };
+            idx >>= 1;
+            let parent_level = level.saturating_add(1);
+            // Keep the map sparse: a subtree that is entirely empty should have
+            // no entry at all, matching a tree that never had a leaf there.
+            if node == self.zero(parent_level) {
+                self.nodes.remove(&(parent_level, idx));
+            } else {
+                self.nodes.insert((parent_level, idx), node);
+            }
+        }
+    }
+
     /// Inserts several values in order, returning one proof each.
     ///
     /// Equivalent to repeated [`IndexedMerkleTree::insert`] — a property the
@@ -848,6 +1002,196 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[24..].copy_from_slice(&n.to_be_bytes());
         Value::from_bytes(bytes)
+    }
+
+    // ---- undo_insert ----
+    //
+    // These live inside the module rather than in tests/properties.rs because
+    // the invariant is *byte-identical internal state*, not merely an equal
+    // root. Two trees can agree on their root while differing in the sparse
+    // node map, and the difference only surfaces later, in a proof generated
+    // against the stale entry. Comparing roots alone would not catch that, and
+    // an integration test cannot reach these fields.
+
+    /// Every piece of state that decides future behaviour.
+    ///
+    /// The root alone is not enough. Two trees can share a root while differing
+    /// in the sparse node map or the value index, and the difference only
+    /// surfaces later in a proof generated against the stale entry — so the
+    /// comparison covers all four.
+    #[derive(PartialEq, Eq, Debug)]
+    struct Fingerprint {
+        root: Hash,
+        leaves: Vec<Leaf>,
+        index: Vec<(Value, u64)>,
+        nodes: Vec<((u8, u64), Hash)>,
+    }
+
+    fn fingerprint(tree: &IndexedMerkleTree) -> Fingerprint {
+        Fingerprint {
+            root: tree.root(),
+            leaves: tree.leaves.clone(),
+            index: tree.index_by_value.iter().map(|(v, i)| (*v, *i)).collect(),
+            nodes: tree.nodes.iter().map(|(k, h)| (*k, *h)).collect(),
+        }
+    }
+
+    #[test]
+    fn undo_restores_byte_identical_state() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        tree.insert(v(50)).unwrap();
+        tree.insert(v(10)).unwrap();
+
+        let before = fingerprint(&tree);
+
+        let proof = tree.insert(v(30)).unwrap();
+        assert_ne!(fingerprint(&tree), before, "insert did nothing");
+
+        tree.undo_insert(v(30), &proof).unwrap();
+        assert_eq!(
+            fingerprint(&tree),
+            before,
+            "undo left the tree differing from before the insertion"
+        );
+    }
+
+    #[test]
+    fn undo_everything_returns_to_a_pristine_empty_tree() {
+        // The strongest form: a tree built up and fully unwound must be
+        // indistinguishable from one that was never touched, including the
+        // sparse node map.
+        let pristine = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+
+        let values = [v(7), v(3), v(90), v(41), v(1)];
+        let mut proofs = Vec::new();
+        for value in values {
+            proofs.push((value, tree.insert(value).unwrap()));
+        }
+        for (value, proof) in proofs.into_iter().rev() {
+            tree.undo_insert(value, &proof).unwrap();
+        }
+
+        assert_eq!(fingerprint(&tree), fingerprint(&pristine));
+    }
+
+    #[test]
+    fn reinserting_after_undo_reproduces_the_original_state() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        tree.insert(v(20)).unwrap();
+
+        let proof = tree.insert(v(60)).unwrap();
+        let after_first = fingerprint(&tree);
+
+        tree.undo_insert(v(60), &proof).unwrap();
+        tree.insert(v(60)).unwrap();
+
+        assert_eq!(
+            fingerprint(&tree),
+            after_first,
+            "insert -> undo -> insert must be identical to a single insert"
+        );
+    }
+
+    #[test]
+    fn undo_is_lifo() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        let first = tree.insert(v(10)).unwrap();
+        let _second = tree.insert(v(20)).unwrap();
+
+        // Undoing the older insertion while a newer one is still present must
+        // be refused, not attempted.
+        let before = fingerprint(&tree);
+        let err = tree.undo_insert(v(10), &first).unwrap_err();
+        assert!(
+            matches!(err, ImtError::NotMostRecent { .. }),
+            "expected NotMostRecent, got {err:?}"
+        );
+        assert_eq!(
+            fingerprint(&tree),
+            before,
+            "a refused undo mutated the tree"
+        );
+    }
+
+    #[test]
+    fn undo_twice_is_refused() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        tree.insert(v(5)).unwrap();
+        let proof = tree.insert(v(15)).unwrap();
+
+        tree.undo_insert(v(15), &proof).unwrap();
+        let before = fingerprint(&tree);
+
+        let err = tree.undo_insert(v(15), &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            ImtError::NotMostRecent { .. } | ImtError::ProofMismatch
+        ));
+        assert_eq!(fingerprint(&tree), before);
+    }
+
+    #[test]
+    fn undo_with_the_wrong_value_is_refused() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        tree.insert(v(5)).unwrap();
+        let proof = tree.insert(v(15)).unwrap();
+        let before = fingerprint(&tree);
+
+        let err = tree.undo_insert(v(99), &proof).unwrap_err();
+        assert_eq!(err, ImtError::ProofMismatch);
+        assert_eq!(fingerprint(&tree), before);
+    }
+
+    #[test]
+    fn undo_with_a_proof_from_another_tree_is_refused() {
+        // Same value, same index, different history — the low leaf differs.
+        let mut a = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        a.insert(v(10)).unwrap();
+        let proof_a = a.insert(v(50)).unwrap();
+
+        let mut b = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        b.insert(v(20)).unwrap();
+        b.insert(v(50)).unwrap();
+        let before = fingerprint(&b);
+
+        let err = b.undo_insert(v(50), &proof_a).unwrap_err();
+        assert_eq!(err, ImtError::ProofMismatch);
+        assert_eq!(fingerprint(&b), before);
+    }
+
+    #[test]
+    fn the_sentinel_cannot_be_undone() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        let fake = InsertionProof {
+            low_leaf: Leaf::SENTINEL,
+            low_leaf_index: 0,
+            low_leaf_siblings: Vec::new(),
+            new_leaf_index: 0,
+            new_leaf_siblings: Vec::new(),
+        };
+        assert!(matches!(
+            tree.undo_insert(Value::ZERO, &fake),
+            Err(ImtError::ReservedValue)
+        ));
+        assert_eq!(tree.leaf_count(), 1, "the sentinel must survive");
+    }
+
+    #[test]
+    fn undo_order_within_a_batch_is_the_reverse_of_insertion() {
+        // The pattern block rollback uses: undo a block's nullifiers in reverse
+        // and the tree returns to its pre-block state exactly.
+        let mut tree = IndexedMerkleTree::with_depth(POOL, D).unwrap();
+        tree.insert(v(100)).unwrap();
+        let checkpoint = fingerprint(&tree);
+
+        let block = [v(40), v(80), v(20), v(60)];
+        let proofs = tree.insert_batch(&block).unwrap();
+
+        for (value, proof) in block.iter().zip(&proofs).rev() {
+            tree.undo_insert(*value, proof).unwrap();
+        }
+        assert_eq!(fingerprint(&tree), checkpoint);
     }
 
     fn tree() -> IndexedMerkleTree {

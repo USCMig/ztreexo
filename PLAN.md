@@ -33,7 +33,7 @@ infrastructure, `fix/<topic>` for defects.
 | 1 | Accumulator core: Utreexo wrapper + IMT | — | **complete for the IMT**; transparent side blocked upstream, and one DoD item unmet (below) |
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
-| 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | not started |
+| 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
 | 2d | Genesis-forward replay | `phase-2d-replay` | not started |
 | 3 | Persistence, snapshots, crash consistency | — | not started |
 | 4 | Bridge node (proof serving) | — | not started |
@@ -116,6 +116,24 @@ run with all four fixtures scores higher than CI ever will. Calibrate against
 the committed fixture only — raising a floor to a locally-observed number fails
 every CI run, which is precisely how these were wrong to begin with.
 
+**A latent Phase 1 serialisation bug survived until stage 2c.**
+`ZcashNodeHash::write` emitted a bare 32 bytes and `read` returned `Some`
+unconditionally — byte-symmetric, but losing the variant, so `Empty` came back
+as `Some([0; 32])`. `MemForest`'s reader skips children for empty branches, so
+resurrecting one as `Some` sent it hunting for children that were never written.
+
+It was invisible for two phases because **nothing serialised a forest** until
+rollback needed a snapshot, and it would have corrupted any snapshot of a forest
+that had ever seen a deletion. Found by the reorg fuzzer at iteration 16,310 of
+seed 1; fixed with a tagged encoding matching upstream, and pinned by regression
+tests. `docs/design.md` D19.
+
+The general lesson, worth carrying into Phase 3: **a serialisation format that
+nothing round-trips is not tested, whatever the unit tests say.** Phase 3
+freezes the on-disk format, so every type it persists needs an explicit
+round-trip test before that happens — not merely an encoder and a decoder that
+look symmetric.
+
 **The transparent side is blocked upstream.** `rustreexo` 0.6.0 generates
 invalid inclusion proofs for any leaf whose sibling has been deleted, reproduced
 with stock upstream types. Pinned in
@@ -160,10 +178,11 @@ counts against the node across all four slices.
 
 ## Ordering constraints
 
-* **2c depends on undo primitives that do not exist.** `StateDelta` already
-  carries the right preimages, but nothing consumes them — there is no
-  `IndexedMerkleTree::undo_insert` and no forest undo. Those are the first thing
-  2c builds.
+* ~~**2c depends on undo primitives that do not exist.**~~ **Done.**
+  `IndexedMerkleTree::undo_insert` exists and is exact. Forest undo turned out
+  to be *impossible* as a delta — `rustreexo` has no positional reinsert — so
+  the transparent side rolls back by snapshot and replay instead. See
+  `docs/design.md` D18.
 * **2d needs a block source abstraction.** Streaming 3.4M blocks cannot run
   through the fixture loader currently living in a test helper; it needs a real
   component with RPC and fixture backends.

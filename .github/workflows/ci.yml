@@ -78,6 +78,22 @@ jobs:
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
+      # Discard any inherited coverage profiles before measuring.
+      #
+      # A CI runner is normally clean, so this is defensive — but the failure
+      # mode is bad enough to be worth one command. `llvm-cov` merges every
+      # .profraw it finds, including ones written by an earlier build of
+      # different code. The result is not obviously wrong: `covered` stays
+      # correct while `notcovered` fills with regions from binaries that no
+      # longer exist.
+      #
+      # Locally this reported imt.rs at 57% when it was really 96%, and
+      # proof.rs at 64% when it was 98% — numbers that read as a catastrophic
+      # regression and would have justified gutting the floors. Anyone running
+      # this job by hand should run the clean step too.
+      - name: Discard stale coverage profiles
+        run: cargo llvm-cov clean --workspace
+
       - name: Measure
         run: >
           cargo llvm-cov --workspace --locked --branch
@@ -129,3 +145,14 @@ jobs:
         run: >
           cargo test --release --workspace --locked
           --test harness_replay --test corpus -- --nocapture
+
+      # CLAUDE.md Phase 2 definition of done: 10^6 randomised reorgs with zero
+      # divergence. Runs in about 75 seconds — it was only ever slow because an
+      # earlier fuzzer let the chain grow unboundedly, making each cold replay
+      # progressively more expensive. See ReorgConfig::chain_len.
+      - name: Reorg fuzzer, definition of done
+        env:
+          ZUTREEXO_REORG_ITERATIONS: "1000000"
+        run: >
+          cargo test --release --workspace --locked
+          --test reorg_fuzz -- --nocapture

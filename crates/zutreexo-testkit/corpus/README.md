@@ -25,13 +25,46 @@ Step 3 is the one people skip. Do not skip it.
 
 ## What a seed is
 
-A repro is self-contained: the offending block as raw hex, plus the
-configuration that caught it. Replaying needs no node, no fixture directory, and
-no network. That is deliberate — a divergence you cannot replay offline is one
-you will not fix.
+There are two kinds, distinguished by a `"kind"` field.
 
-Seeds are replayed against a **fresh, empty state**, one block, with contiguity
-checks relaxed. That covers any divergence the block causes on its own.
+### Block seeds — what the differential harness writes
+
+Self-contained: the offending block as raw hex, plus the configuration that
+caught it. Replaying needs no node, no fixture directory, and no network. That
+is deliberate — a divergence you cannot replay offline is one you will not fix.
+
+Replayed against a **fresh, empty state**, one block, with contiguity checks
+relaxed. That covers any divergence the block causes on its own.
+
+### Reorg seeds — what the reorg fuzzer writes
+
+```json
+{
+  "kind": "reorg",
+  "divergence": "what went wrong, as reported",
+  "seed": 1,
+  "iterations": 25000,
+  "depth": 12,
+  "chain_len": 30,
+  "max_reorg_depth": 8,
+  "snapshot_interval": 4
+}
+```
+
+A reorg divergence is not a block. It emerges from a *sequence* of rollbacks and
+re-applications, and the only compact way to record that sequence is the number
+it all derives from. The fuzzer's RNG is a xorshift64\* written out in
+`src/reorg.rs` rather than pulled from a crate, precisely so this stays
+reproducible — if the seed-to-sequence mapping ever changes, every committed
+reorg seed silently stops reproducing what it was recorded for.
+
+Reorg seeds always replay with `cold_check_every = 1`. A seed exists because
+something diverged, and the sampling cadence used in normal runs could step
+straight past the iteration that mattered.
+
+Seeds never carry an injected fault. A committed seed describes real inputs; a
+fault describes deliberate damage, and a "regression" that only reproduces under
+injected damage is not guarding anything.
 
 ## The known limitation
 

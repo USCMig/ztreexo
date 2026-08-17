@@ -44,8 +44,14 @@ use crate::pool::ChainAccumulators;
 /// * `spent` — the full [`UtxoLeaf`] of every deleted output. Re-inserting
 ///   needs the contents, not the outpoint, because the leaf hash commits to
 ///   them.
-/// * `created` — outpoints of every inserted output, so undo knows what to
-///   remove from the forest and the index.
+/// * `created` — the full [`UtxoLeaf`] of every inserted output, not just its
+///   outpoint or its hash. The leaf hash is derivable, so storing only the hash
+///   looks sufficient and is not: a rollback that restores a snapshot and
+///   replays forward has to rebuild the *outpoint index*, and that needs the
+///   output's value, script, height, and coinbase flag. With only the hash, the
+///   forest would come back correct while the index came back short, and the
+///   failure would surface much later as an `UnknownOutpoint` on some block
+///   that spends a replayed output. Found while writing `rollback.rs`.
 /// * `insertions` — the [`InsertionProof`] per nullifier. It carries the low
 ///   leaf *as it stood before* the insertion plus both indices, which is
 ///   exactly what is needed to restore the linked list and drop the appended
@@ -56,8 +62,9 @@ pub struct StateDelta {
     pub height: u32,
     /// Outputs deleted, with the contents needed to restore them.
     pub spent: Vec<(OutPoint, UtxoLeaf)>,
-    /// Outputs created, in insertion order.
-    pub created: Vec<(OutPoint, Hash)>,
+    /// Outputs created, in insertion order, with the contents needed to
+    /// rebuild the outpoint index on replay.
+    pub created: Vec<(OutPoint, UtxoLeaf)>,
     /// Nullifier insertions per pool, in application order.
     pub insertions: BTreeMap<PoolId, Vec<(Value, InsertionProof)>>,
     /// Note commitments observed per pool. Recorded for cross-checking only.
@@ -279,7 +286,8 @@ pub fn apply_block(
     }
     for ((outpoint, leaf), hash) in summary.transparent_creates.iter().zip(&created_hashes) {
         state.insert_utxo(*outpoint, leaf.clone());
-        delta.created.push((*outpoint, *hash));
+        let _ = hash;
+        delta.created.push((*outpoint, leaf.clone()));
     }
 
     // 3b. Insert nullifiers, per pool, in block order.

@@ -428,6 +428,98 @@ proptest! {
             live.extend(additions);
         }
     }
+
+    /// **The reorg invariant, at the accumulator level.**
+    ///
+    /// Insert a sequence, undo an arbitrary suffix of it in reverse, and the
+    /// result must equal a tree built from the surviving prefix alone. Stage 2c
+    /// rests on this: a reorg is exactly "undo a suffix, apply a different
+    /// one", and if undo does not land precisely on the prefix state then every
+    /// root after the reorg is wrong.
+    ///
+    /// Compared by root *and* by non-membership answers, because a tree can
+    /// carry a stale successor pointer while still hashing correctly, and it is
+    /// the pointer that decides future proofs.
+    #[test]
+    fn undoing_a_suffix_equals_never_inserting_it(
+        pool in any_pool(),
+        values in distinct_values(32),
+        keep in 0usize..32,
+    ) {
+        let keep = keep.min(values.len());
+        let (prefix, suffix) = values.split_at(keep);
+
+        let mut tree = IndexedMerkleTree::with_depth(pool, DEPTH).unwrap();
+        let mut undo_stack = Vec::new();
+        for value in &values {
+            let proof = tree.insert(*value).unwrap();
+            undo_stack.push((*value, proof));
+        }
+
+        // Unwind the suffix, newest first.
+        for (value, proof) in undo_stack.into_iter().rev().take(suffix.len()) {
+            tree.undo_insert(value, &proof).unwrap();
+        }
+
+        let expected = tree_with(pool, prefix);
+
+        prop_assert_eq!(tree.root(), expected.root(), "root diverged after undo");
+        prop_assert_eq!(tree.leaf_count(), expected.leaf_count());
+        prop_assert_eq!(tree.value_count(), expected.value_count());
+
+        // Membership must agree for everything, kept or undone.
+        for value in &values {
+            prop_assert_eq!(
+                tree.contains(value),
+                expected.contains(value),
+                "membership disagreed after undo"
+            );
+        }
+
+        // And so must the proofs, which is the stricter claim: a stale pointer
+        // shows up here even when the root happens to match.
+        for value in suffix {
+            let a = tree.prove_non_membership(*value);
+            let b = expected.prove_non_membership(*value);
+            prop_assert_eq!(a.is_ok(), b.is_ok());
+            if let (Ok(a), Ok(b)) = (a, b) {
+                prop_assert_eq!(a.low_leaf, b.low_leaf, "low leaf diverged after undo");
+            }
+        }
+    }
+
+    /// Undo must refuse anything that is not the newest insertion, and leave
+    /// the tree untouched when it does.
+    #[test]
+    fn out_of_order_undo_is_always_refused(
+        pool in any_pool(),
+        values in distinct_values(16),
+    ) {
+        // No `prop_assume!` on the length. The loop below is already empty for
+        // fewer than two values, so short inputs are vacuous rather than wrong
+        // — and assuming them away burned proptest's global reject budget at
+        // 10,000 cases, because `distinct_values` dedups below two often
+        // enough to trip it. A rejected case tests nothing either way; this
+        // way the run does not abort.
+        let mut tree = IndexedMerkleTree::with_depth(pool, DEPTH).unwrap();
+        let mut proofs = Vec::new();
+        for value in &values {
+            proofs.push((*value, tree.insert(*value).unwrap()));
+        }
+
+        let root_before = tree.root();
+        let count_before = tree.leaf_count();
+
+        // Everything except the last insertion must be refused.
+        for (value, proof) in proofs.iter().take(values.len().saturating_sub(1)) {
+            prop_assert!(
+                tree.undo_insert(*value, proof).is_err(),
+                "an out-of-order undo was accepted"
+            );
+        }
+        prop_assert_eq!(tree.root(), root_before, "a refused undo mutated the tree");
+        prop_assert_eq!(tree.leaf_count(), count_before);
+    }
 }
 
 fn utxo_leaf(n: u32) -> Hash {

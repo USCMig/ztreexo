@@ -469,6 +469,107 @@ Revisit if D10 is resolved and the transparent forest becomes load-bearing.
 
 ---
 
+## D18 — Rollback is delta-based for nullifiers and snapshot-based for the forest
+
+**Stage 2c.**
+
+CLAUDE.md Phase 2 says to persist "the deleted leaves *and their positions*" in
+a `StateDelta` and undo from that. **That plan assumes an API `rustreexo` does
+not have.** It exposes only `modify(add, del)`, which appends; there is no way
+to reinsert a leaf at the position it occupied. A Utreexo deletion therefore
+cannot be inverted from a delta at any price, and `StateDelta::spent` — built in
+2a for exactly this — cannot serve it.
+
+The two halves get different mechanisms:
+
+* **Nullifiers — delta undo, exact.** An IMT insertion rewrites one leaf and
+  appends another, and `InsertionProof` already carries the low leaf as it stood
+  beforehand. `undo_insert` inverts it precisely, and is strictly LIFO because
+  undoing out of order leaves the linked list pointing at an index that no
+  longer holds what the pointer claims — a tree that hashes to a plausible root
+  while encoding a set nobody can reason about.
+* **Transparent — snapshot and replay.** Restore a serialised forest from at or
+  below the target, then replay the intervening deltas forward.
+
+Snapshots go through `serialize`/`deserialize` and **not** `clone()`.
+`MemForest` derives `Clone`, but holds `Rc<Node>` where `Node` keeps its hash in
+a `Cell`, so the clone shares nodes and mutating either handle changes both. It
+compiles and reads like a snapshot. Pinned in
+`tests/upstream_rustreexo.rs`, reported upstream.
+
+Two corrections fell out of building it, both in code written earlier:
+
+* **`StateDelta::created` kept almost enough.** It stored `(OutPoint, Hash)`.
+  The forest needs only the hash, so it looked sufficient — but replay must also
+  rebuild the *outpoint index*, which needs the output's value, script, height
+  and coinbase flag. The forest would have come back correct while the index
+  came back short, surfacing much later as an `UnknownOutpoint` on an unrelated
+  block. CLAUDE.md warns that this is exactly where reorg work goes wrong.
+* **Retention is a depth, not a count.** Keeping "two snapshots" gives 200
+  blocks of reach at an interval of 100 and *one block* at an interval of 1.
+  `max_depth` is now its own knob, so a small interval costs memory and never
+  costs reach.
+
+Sizing snapshots for mainnet needs the transparent UTXO count, still a Phase 0
+gap — Zebra does not implement `gettxoutsetinfo`.
+
+---
+
+## D19 — `ZcashNodeHash` serialisation must be tagged
+
+**Stage 2c. A latent Phase 1 defect, found by the reorg fuzzer.**
+
+`write` emitted a bare 32 bytes and `read` returned `Some(bytes)`
+unconditionally. Byte-symmetric, and wrong: the *variant* was lost, so `Empty`
+came back as `Some([0; 32])`.
+
+`MemForest`'s reader only descends into a branch's children when
+`!data.is_empty()`, so an empty node writes none. A reader that resurrects it as
+`Some` goes looking for two children that were never written and fails with
+"failed to fill whole buffer".
+
+The encoding is now tagged — `[0]` empty, `[1]` placeholder, `[2]` plus the
+digest — matching upstream `BitcoinNodeHash` byte for byte. Unknown tags are
+rejected rather than assumed, since snapshots are bytes from disk.
+
+This was invisible from Phase 1 until stage 2c because **nothing serialised a
+forest until rollback needed a snapshot**. It would have corrupted any snapshot
+containing an empty branch node — which is to say, any forest that had ever seen
+a deletion.
+
+One knock-on: `rustreexo` writes proof hashes through the same
+`AccumulatorHash::write`, so a proof hash is 33 bytes on the wire, not 32. The
+header validator's exact-fit check rejected every valid proof until corrected.
+It is now an upper bound, because tagged entries are variable width — `Empty`
+and `Placeholder` cost one byte — and an equality check is simply wrong against
+a variable-width encoding. It still refuses a header claiming a billion hashes
+in forty bytes, which is what it exists for.
+
+---
+
+## D20 — The reorg fuzzer pins the chain height
+
+**Stage 2c.**
+
+The first version chose a rollback depth and an extension length independently.
+Both averaged about four blocks, so the tip random-walked upward — reaching
+height 15,722 by iteration 24,523, where the depth-12 tree hit its 4,096-leaf
+ceiling and the run died on a capacity error that read like a rollback bug.
+
+It also dominated the cost. A cold replay is linear in chain length, so the
+validating step grew steadily more expensive; most of the 340 seconds that
+100,000 iterations took was replaying a chain thousands of blocks long rather
+than exercising reorgs. Pinning the height took the same run to **7.4 seconds**,
+and made the 10⁶ definition of done a **75-second** job rather than a
+ninety-minute one.
+
+Nothing is lost: the state machine does not care about absolute height, and
+every block's content still varies. `ReorgReport::highest_tip` is asserted
+against `chain_len` so the regression is visible immediately rather than tens of
+thousands of iterations later.
+
+---
+
 ## D17 — Every tier is proven to fire, and proven to be the only one that does
 
 **Stage 2b.**

@@ -41,6 +41,14 @@ pub enum UtreexoError {
     #[error("leaf is absent from the accumulator")]
     UnknownLeaf,
 
+    /// A forest snapshot could not be written or read back.
+    ///
+    /// Serialisation is the only way to copy a forest — see
+    /// [`UtxoForest::to_bytes`] — so a failure here means rollback has no
+    /// usable snapshot, not merely that an optimisation was unavailable.
+    #[error("utreexo snapshot i/o: {0}")]
+    Snapshot(String),
+
     /// `rustreexo` reported a failure. Its errors are `String`-typed, so they
     /// are carried across rather than re-modelled.
     #[error("utreexo backend error: {0}")]
@@ -125,14 +133,53 @@ impl AccumulatorHash for ZcashNodeHash {
         ZcashNodeHash::Some(hash::utxo_node(&l, &r))
     }
 
+    /// Tagged encoding: `[0]` empty, `[1]` placeholder, `[2]` + 32 bytes.
+    ///
+    /// # The tag is load-bearing, not decoration
+    ///
+    /// This originally wrote a bare 32 bytes and read them back as
+    /// `Some(bytes)`, which is byte-symmetric and still wrong. `MemForest`'s
+    /// deserializer only recurses into a branch's children when
+    /// `!data.is_empty()`, so an `Empty` node writes no children — and a reader
+    /// that resurrects it as `Some([0; 32])` reports `is_empty() == false`,
+    /// goes looking for two children that were never written, and fails with
+    /// "failed to fill whole buffer".
+    ///
+    /// The variant therefore has to survive the round trip, which means a tag.
+    /// This matches upstream `BitcoinNodeHash` byte for byte.
+    ///
+    /// Latent since Phase 1 and invisible until stage 2c, because nothing
+    /// serialised a forest before rollback snapshots needed to. Found by the
+    /// reorg fuzzer at iteration 16,310 of seed 1.
     fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&self.to_bytes().unwrap_or([0u8; 32]))
+        match self {
+            ZcashNodeHash::Empty => writer.write_all(&[0]),
+            ZcashNodeHash::Placeholder => writer.write_all(&[1]),
+            ZcashNodeHash::Some(hash) => {
+                writer.write_all(&[2])?;
+                writer.write_all(hash)
+            }
+        }
     }
 
     fn read<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let mut buf = [0u8; 32];
-        reader.read_exact(&mut buf)?;
-        Ok(ZcashNodeHash::Some(buf))
+        let mut tag = [0u8; 1];
+        reader.read_exact(&mut tag)?;
+        match tag[0] {
+            0 => Ok(ZcashNodeHash::Empty),
+            1 => Ok(ZcashNodeHash::Placeholder),
+            2 => {
+                let mut buf = [0u8; 32];
+                reader.read_exact(&mut buf)?;
+                Ok(ZcashNodeHash::Some(buf))
+            }
+            // Rejected rather than assumed: a snapshot is bytes from disk, and
+            // CLAUDE.md §5 rule 3 bans panicking on input in these paths.
+            other => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown node hash tag {other}"),
+            )),
+        }
     }
 }
 
@@ -396,6 +443,34 @@ impl UtxoForest {
             .modify(&adds, &dels)
             .map_err(UtreexoError::Backend)
     }
+
+    /// Serialises the whole forest to bytes.
+    ///
+    /// # Why this exists rather than `Clone`
+    ///
+    /// This is the only way to take an independent copy of the forest.
+    /// `MemForest` derives `Clone`, but it holds `Rc<Node>` and `Node` stores
+    /// its hash in a `Cell`, so the derived clone shares nodes — mutating
+    /// either handle is visible through the other. It compiles, it reads like a
+    /// snapshot, and it silently is not one. That behaviour is pinned in
+    /// `tests/upstream_rustreexo.rs` and reported upstream.
+    ///
+    /// Costs roughly 79 bytes per leaf, so a caller snapshotting for rollback
+    /// should do it at an interval rather than every block.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, UtreexoError> {
+        let mut bytes = Vec::new();
+        self.forest
+            .serialize(&mut bytes)
+            .map_err(|error| UtreexoError::Snapshot(error.to_string()))?;
+        Ok(bytes)
+    }
+
+    /// Restores a forest previously written by [`UtxoForest::to_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<UtxoForest, UtreexoError> {
+        let forest = MemForest::deserialize(bytes)
+            .map_err(|error| UtreexoError::Snapshot(error.to_string()))?;
+        Ok(UtxoForest { forest })
+    }
 }
 
 #[cfg(test)]
@@ -559,5 +634,72 @@ mod tests {
             &BitcoinNodeHash::new([2u8; 32]),
         );
         assert_ne!(parent.to_bytes().unwrap_or_default(), *bitcoin);
+    }
+
+    /// Every variant must survive a write/read round trip.
+    ///
+    /// Regression test. The original implementation wrote a bare 32 bytes and
+    /// read them back as `Some`, which is byte-symmetric and loses the
+    /// variant — `Empty` came back as `Some([0; 32])`. `MemForest`'s reader
+    /// only descends into a branch's children when `!data.is_empty()`, so an
+    /// empty node writes none; resurrecting it as `Some` sends the reader
+    /// hunting for children that do not exist.
+    #[test]
+    fn node_hash_variants_round_trip() {
+        for original in [
+            ZcashNodeHash::Empty,
+            ZcashNodeHash::Placeholder,
+            ZcashNodeHash::Some([7u8; 32]),
+            ZcashNodeHash::Some([0u8; 32]),
+        ] {
+            let mut bytes = Vec::new();
+            original.write(&mut bytes).unwrap();
+            let back = ZcashNodeHash::read(&mut bytes.as_slice()).unwrap();
+            assert_eq!(back, original, "variant did not survive the round trip");
+            assert_eq!(
+                back.is_empty(),
+                original.is_empty(),
+                "is_empty() changed across the round trip, which is what breaks \
+                 MemForest deserialization"
+            );
+        }
+
+        // `Some([0; 32])` must stay distinct from `Empty`. Without the tag the
+        // two are indistinguishable on the wire, which is the heart of the bug.
+        let mut zeros = Vec::new();
+        ZcashNodeHash::Some([0u8; 32]).write(&mut zeros).unwrap();
+        let mut empty = Vec::new();
+        ZcashNodeHash::Empty.write(&mut empty).unwrap();
+        assert_ne!(zeros, empty);
+    }
+
+    #[test]
+    fn an_unknown_node_hash_tag_is_rejected() {
+        // Snapshots are bytes from disk; a bad tag must be an error, not a
+        // panic and not a silent misparse.
+        let bytes = [9u8, 0, 0, 0];
+        assert!(ZcashNodeHash::read(&mut bytes.as_slice()).is_err());
+    }
+
+    /// A forest carrying empty nodes must snapshot and restore.
+    ///
+    /// This is the shape rollback actually needs, and the one the old encoding
+    /// could not represent. Deletions are what create empty positions.
+    #[test]
+    fn a_forest_with_deletions_survives_a_snapshot() {
+        let leaves: Vec<Hash> = (1..=8u8).map(|n| leaf(n).hash()).collect();
+        let mut forest = UtxoForest::new();
+        forest.insert(&leaves).unwrap();
+        forest.delete(&leaves[..3]).unwrap();
+
+        let bytes = forest.to_bytes().unwrap();
+        let restored = UtxoForest::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.roots(), forest.roots());
+
+        // And the restored forest must be independent, which is the whole
+        // reason snapshots go through bytes rather than `clone()`.
+        let mut forest = forest;
+        forest.delete(&leaves[3..5]).unwrap();
+        assert_ne!(restored.roots(), forest.roots());
     }
 }

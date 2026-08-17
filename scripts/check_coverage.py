@@ -16,7 +16,21 @@ which trains everyone to ignore it. So the floors below are set at the measured
 values and can only be raised. Lowering one is a deliberate, reviewable edit,
 which is the property that matters.
 
+# Always clean first
+
+`llvm-cov` merges every `.profraw` it finds, including ones left by an earlier
+build of different code. The output is not obviously wrong — `covered` stays
+correct while `notcovered` fills up with regions from binaries that no longer
+exist — so it reads as a sudden, catastrophic regression.
+
+Measured locally without cleaning: `imt.rs` 57% (really 96%), `proof.rs` 64%
+(really 98%), `utreexo.rs` 52% (really 92%). Believing those numbers would have
+meant lowering the floors by forty points and discarding the gate entirely.
+
+The tell is `covered` holding steady while the denominator grows.
+
 Usage:
+    cargo llvm-cov clean --workspace
     cargo +nightly llvm-cov --workspace --branch --json --output-path cov.json
     python3 scripts/check_coverage.py cov.json
 """
@@ -51,57 +65,67 @@ import sys
 # locally would fail every CI run, which is how these were wrong to begin with.
 FILE_FLOORS: dict[str, dict[str, float]] = {
     # The load-bearing file. CLAUDE.md Phase 1 wants 100% *branch* coverage
-    # here. It is at 41/48. The gap is 7 branches — tracked in PLAN.md, and
-    # small enough to close deliberately rather than by drift.
+    # here; it is at 58/70. Stage 2c raised both the numerator and the
+    # denominator by adding `undo_insert`.
     "crates/zutreexo-accumulator/src/imt.rs": {
-        "regions": 96.0,
-        "lines": 95.6,
-        "min_branches": 39,  # measured 41/48
+        "regions": 96.8,
+        "lines": 96.4,
+        "min_branches": 56,  # measured 58/70
     },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
-    # rather than hiding inside the workspace average. Two upstream defects
-    # surfaced here before any fuzzer ran; see docs/design.md D13.
+    # rather than hiding inside the workspace average.
     "crates/zutreexo-accumulator/src/proof.rs": {
-        "regions": 96.7,
-        "lines": 97.6,
-        "min_branches": 15,  # measured 16-17/20, varies — see below
+        "regions": 97.7,
+        "lines": 97.9,
+        "min_branches": 14,  # measured 16-17/20, varies — see below
     },
     # Domain separation is consensus-critical and cheap to cover fully.
     "crates/zutreexo-accumulator/src/hash.rs": {
-        "regions": 97.8,
+        "regions": 99.5,
         "lines": 100.0,
+    },
+    # Carries the tagged node-hash encoding whose absence corrupted every
+    # forest snapshot until stage 2c (docs/design.md D19). Floored so that
+    # regression cannot recur unnoticed.
+    "crates/zutreexo-accumulator/src/utreexo.rs": {
+        "regions": 92.3,
+        "lines": 90.5,
     },
     # The three below are the reason the committed fixture exists. Each one
     # measured 0.00% before it, because their only tests are fixture-gated.
-    # Floored individually rather than left to the workspace average so that a
-    # fixture going missing fails here, naming the file, instead of showing up
-    # as a diffuse two-point drop in the total.
     "crates/zutreexo-chain/src/block_apply.rs": {
-        "regions": 88.3,
-        "lines": 78.4,
-        "min_branches": 13,  # measured 15/22
+        "regions": 93.0,
+        "lines": 86.1,
+        "min_branches": 15,  # measured 17/22
     },
-    # Raised in 2b from 80.4/84.7: the harness drives extraction over the same
-    # slice with both oracles, reaching paths the bare fixture replay did not.
     "crates/zutreexo-chain/src/extract.rs": {
-        "regions": 84.7,
+        "regions": 87.4,
         "lines": 88.0,
         "min_branches": 2,  # measured 2/2
     },
-    # Raised in 2b from 63.9/60.2 for the same reason. Still the lowest floor
-    # here: much of the remainder is accessors no replay path reaches.
     "crates/zutreexo-chain/src/pool.rs": {
-        "regions": 74.7,
-        "lines": 69.8,
+        "regions": 83.7,
+        "lines": 80.4,
     },
-    # The differential harness. It is test infrastructure, but it is also the
-    # project's primary correctness signal (CLAUDE.md §5 rule 2), so a silent
-    # regression in it would disable the thing that catches everything else.
-    # The uncovered remainder is mostly repro-write failure paths.
+    # Reorg rollback. The invariant it serves is byte-identical state after an
+    # unwind, so a silent gap here is the expensive kind.
+    "crates/zutreexo-chain/src/rollback.rs": {
+        "regions": 92.9,
+        "lines": 95.7,
+        "min_branches": 27,  # measured 29/32
+    },
+    # The differential harness and the reorg fuzzer. Test infrastructure, but
+    # also the project's primary correctness signal (CLAUDE.md §5 rule 2): a
+    # silent regression in either disables what catches everything else.
     "crates/zutreexo-testkit/src/harness.rs": {
         "regions": 80.2,
         "lines": 80.5,
         "min_branches": 32,  # measured 34/52
+    },
+    "crates/zutreexo-testkit/src/reorg.rs": {
+        "regions": 88.7,
+        "lines": 85.7,
+        "min_branches": 28,  # measured 30/38
     },
     # The oracles themselves. If these rot, every tier built on them weakens
     # without anything going red.
@@ -110,30 +134,27 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 93.4,
         "min_branches": 11,  # measured 13/14
     },
+    "crates/zutreexo-testkit/src/naive.rs": {
+        "regions": 99.2,
+        "lines": 99.2,
+        "min_branches": 16,  # measured 18/20
+    },
     "crates/zutreexo-testkit/src/checkpoints.rs": {
         "regions": 95.4,
         "lines": 97.3,
     },
 }
 
-# Floors sit roughly a third of a point below the measured value: the workspace
-# denominator moves whenever any crate gains code, so a hairline margin here
-# fails on changes that improved coverage in absolute terms. The GitHub runner
-# also uses a different nightly build than any developer's, and region
-# attribution shifts slightly between them.
-# Measured 92.50 / 91.61 / 78.65 in the CI profile at stage 2b. Lower than the
-# 93.34 / 92.55 / 83.04 of the previous commit, and that is expected rather than
-# a regression: 2b adds roughly a thousand lines of harness, whose error paths
-# are less exercised than the accumulator's, and it grows the branch denominator
-# from 112 to 178. The per-file floors above are what stop that dilution hiding
-# a real drop in any one file.
+# Measured 93.48 / 92.22 / 80.37 in the CI profile at stage 2c, after
+# `cargo llvm-cov clean`. Every per-file figure rose from 2b; the workspace
+# total rose with them.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 92.1,
-    "lines": 91.2,
+    "regions": 93.1,
+    "lines": 91.9,
     # Percentage, not a count: the workspace denominator grows as code is added,
     # so an absolute floor here would have to be edited on every commit. Carries
     # extra tolerance for the branch jitter described below.
-    "branches": 77.0,
+    "branches": 78.5,
 }
 
 # ---------------------------------------------------------------------------

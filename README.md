@@ -116,7 +116,11 @@ All three are implemented and all four fixture slices pass. **Each tier is prove
 | reorder nullifiers within a pool | **tier 2** | tier 1 — counts are unchanged |
 | undercount a note commitment | **tier 3** | tiers 1 and 2 — both read the same parse |
 
-Still to come: reorg fuzzing, which is where accumulator implementations actually break. Utreexo deletion is not naturally invertible, so undo needs the deleted leaves *and* their positions, and it is easy to keep almost enough. The invariant is byte-identical roots or failure — never "equivalent", never "same balance".
+Plus reorg fuzzing, which is where accumulator implementations actually break. The invariant is byte-identical roots or failure — never "equivalent", never "same balance" — and **10⁶ randomised reorgs hold it**, each comparing the incrementally-maintained state against a cold replay of the chain that now exists.
+
+Utreexo deletion turned out not to be invertible from a delta *at all*: `rustreexo` offers no way to reinsert a leaf at its former position. The nullifier trees roll back by delta, exactly; the transparent forest rolls back by snapshot and replay. See `docs/design.md` D18.
+
+The fuzzer earned its place immediately, finding a serialisation bug that had been latent since Phase 1 — `Empty` node hashes were being read back as `Some`, which would have corrupted any snapshot of a forest that had ever seen a deletion.
 
 ## Status
 
@@ -124,7 +128,7 @@ Still to come: reorg fuzzing, which is where accumulator implementations actuall
 |---|---|---|
 | 0 | Spike, baseline measurements, fixture capture | **complete** — measured at mainnet tip 2026-08-12, [`docs/benchmarks.md`](docs/benchmarks.md) |
 | 1 | Accumulator core (Utreexo wrapper + IMT) | **complete for the IMT**; transparent side blocked, see below. One DoD item unmet: `imt.rs` branch coverage is 41/48, not the required 100% — see [`PLAN.md`](PLAN.md) |
-| 2 | Chain state transition + differential harness | **2a and 2b done** — real blocks parse and apply; all four fixture slices agree with an independent oracle and with `zebrad`. Rollback and reorg fuzzing (2c) next |
+| 2 | Chain state transition + differential harness | **2a, 2b and 2c done** — real blocks parse and apply; all four fixture slices agree with an independent oracle and with `zebrad`; 10⁶ randomised reorgs replay byte-identical to a cold replay. Genesis-forward replay (2d) next |
 | 3 | Persistence, snapshots, crash consistency | not started |
 | 4 | Bridge node (proof serving) | not started |
 | 5 | Compact state node + published benchmarks | not started |

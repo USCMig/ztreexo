@@ -27,5 +27,6 @@
 pub mod checkpoints;
 pub mod harness;
 pub mod naive;
+pub mod reorg;
 pub mod state;
 pub mod vectors;
