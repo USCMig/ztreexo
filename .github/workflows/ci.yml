@@ -28,20 +28,25 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
-      # `--all-targets` matters: it covers tests and benches, which is where
+      # `--locked` on every cargo invocation below: Cargo.lock is committed, so
+      # CI must resolve to exactly what a developer resolved to. Without it a
+      # dependency can float in CI and nothing notices until the versions
+      # disagree about something that matters.
+      #
+      # `--all-targets` matters too: it covers tests and benches, which is where
       # the panicking-construct bans are easiest to violate by accident.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Docs
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --workspace --no-deps --document-private-items --locked
 
       # Compiling the benches catches API drift without paying for a run.
       - name: Benches compile
-        run: cargo bench --workspace --no-run
+        run: cargo bench --workspace --no-run --locked
 
   deny:
     name: cargo-deny
@@ -52,8 +57,51 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
+  # Per-file coverage floors. CLAUDE.md Phase 1 sets its bar on one file —
+  # "100% branch coverage on imt.rs" — which a workspace average would let rot,
+  # so scripts/check_coverage.py enforces per-file.
+  #
+  # Nightly is required, not preferred: branch coverage needs
+  # `-Z coverage-options=branch`, which stable rejects. That is why the Phase 1
+  # criterion had never actually been measured. See PLAN.md.
+  coverage:
+    name: coverage floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Measure
+        run: >
+          cargo llvm-cov --workspace --locked --branch
+          --json --output-path coverage.json
+
+      - name: Enforce floors
+        run: python3 scripts/check_coverage.py coverage.json
+
+      # Kept regardless of outcome: when the job fails, the report is the first
+      # thing anyone wants.
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.json
+          if-no-files-found: warn
+
   # CLAUDE.md Phase 1 definition of done: proptests green at 10k cases. Far too
   # slow for a per-push job, so it runs nightly and on demand.
+  #
+  # NOTE: because of the `if:` below this job is *skipped* on pull requests, and
+  # GitHub never treats a skipped check as satisfying a required status check.
+  # Do not add it to branch protection or every PR will block forever.
   proptest-sweep:
     name: proptest 10k
     runs-on: ubuntu-latest
@@ -65,4 +113,6 @@ jobs:
       - name: Property sweep
         env:
           PROPTEST_CASES: "10000"
-        run: cargo test --release --workspace --test properties --test differential
+        run: >
+          cargo test --release --workspace --locked
+          --test properties --test differential

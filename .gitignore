@@ -37,5 +37,21 @@ target
 # a bucket, per CLAUDE.md Phase 0. Regenerate with scripts/measure_baseline.sh.
 fixtures/*.jsonl
 
+# ...except one. Every test that touches zutreexo-chain is gated on a fixture
+# being present, so with all of them ignored CI executed *none* of that crate —
+# block_apply.rs, extract.rs and pool.rs all measured 0.00% coverage, and the
+# green checkmarks meant far less than they looked like.
+#
+# nu5-orchard is the smallest slice at 1.85 MB for 200 blocks (median block
+# 2.2 KB). Committing just this one lifts workspace coverage from 74.50% to
+# 92.50% — 18 of the 19.1 points that the full 65 MB corpus gives, for 2.8% of
+# the bytes. The rest stay ignored: ironwood-activation alone is 59.3 MB because
+# those blocks average 89.6 KB each.
+#
+# The other three slices still earn their place locally and in the nightly
+# sweep, as differential-testing breadth — Sprout activity, sandblasting's
+# pathological output counts, Ironwood — rather than as code coverage.
+!fixtures/nu5-orchard.jsonl
+
 # Personal drafts and notes — not project deliverables.
 personal/
