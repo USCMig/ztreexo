@@ -34,7 +34,7 @@ infrastructure, `fix/<topic>` for defects.
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
-| 2d | Genesis-forward replay | `phase-2d-replay` | not started |
+| 2d | Genesis-forward replay | `phase-2d-replay` | **partial** — 1.95M blocks (56%) applied with zero errors; stopped on a memory ceiling, not a fault |
 | 3 | Persistence, snapshots, crash consistency | — | not started |
 | 4 | Bridge node (proof serving) | — | not started |
 | 5 | Compact state node, published benchmarks | — | not started |
@@ -133,6 +133,38 @@ nothing round-trips is not tested, whatever the unit tests say.** Phase 3
 freezes the on-disk format, so every type it persists needs an explicit
 round-trip test before that happens — not merely an encoder and a decoder that
 look symmetric.
+
+**`apply_block` mishandled intra-block spends, and a test defended the bug.**
+A transaction may spend an output created by an earlier transaction in the same
+block; mainnet block 572 does. `block_apply.rs` ordered all deletions before all
+insertions and documented that as *preventing* it, "which Zcash consensus
+forbids" — false, a Bitcoin analogy applied backwards (CLAUDE.md §5 rule 7).
+
+Three things kept it alive for three stages, and each is worth carrying forward:
+
+* **A tolerance absorbed it.** Every fixture replay in 2a–2c ran with
+  `allow_unknown_spends`, added for the legitimate reason that windowed replays
+  start mid-chain. It counted intra-block spends as pre-window spends. Treat any
+  "ignore what we cannot resolve" option as capable of hiding a different bug
+  than the one it was added for.
+* **A test encoded the false rule.** The naive oracle asserted
+  `a_block_cannot_spend_what_it_creates`. An oracle that encodes a wrong rule
+  does not merely fail to catch the bug — it defends it.
+* **Only the strict path found it.** The genesis replay cannot use the
+  tolerance, and hit it after 572 blocks.
+
+Fixed by cancellation (`docs/design.md` D21), pinned by
+`crates/zutreexo-chain/tests/intra_block_spend.rs`, which runs in milliseconds
+where the discovery took six hours.
+
+**Reaching tip needs less memory per unspent output.** The run stopped at 1.95M
+blocks on a deliberate 24 GiB ceiling — deliberate because this machine also
+hosts the zebrad being read from, and letting the kernel choose between them
+would cost a resync to learn nothing. At 553 bytes per output the transparent
+index dominates; storing the precomputed leaf hash rather than the whole
+`UtxoLeaf` would cut that by roughly an order of magnitude, at the cost of
+rollback needing another source for leaf contents. That is the next decision for
+2d.
 
 **The transparent side is blocked upstream.** `rustreexo` 0.6.0 generates
 invalid inclusion proofs for any leaf whose sibling has been deleted, reproduced

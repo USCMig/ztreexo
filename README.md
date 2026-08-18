@@ -128,7 +128,7 @@ The fuzzer earned its place immediately, finding a serialisation bug that had be
 |---|---|---|
 | 0 | Spike, baseline measurements, fixture capture | **complete** — measured at mainnet tip 2026-08-12, [`docs/benchmarks.md`](docs/benchmarks.md) |
 | 1 | Accumulator core (Utreexo wrapper + IMT) | **complete for the IMT**; transparent side blocked, see below. One DoD item unmet: `imt.rs` branch coverage is 41/48, not the required 100% — see [`PLAN.md`](PLAN.md) |
-| 2 | Chain state transition + differential harness | **2a, 2b and 2c done** — real blocks parse and apply; all four fixture slices agree with an independent oracle and with `zebrad`; 10⁶ randomised reorgs replay byte-identical to a cold replay. Genesis-forward replay (2d) next |
+| 2 | Chain state transition + differential harness | **2a–2c done, 2d partial** — all four fixture slices agree with an independent oracle and with `zebrad`; 10⁶ randomised reorgs replay byte-identical to a cold replay; 1.95M mainnet blocks replayed from genesis with zero errors |
 | 3 | Persistence, snapshots, crash consistency | not started |
 | 4 | Bridge node (proof serving) | not started |
 | 5 | Compact state node + published benchmarks | not started |

@@ -314,3 +314,87 @@ ZUTREEXO_BENCH_HUGE=1 cargo bench -p zutreexo-accumulator # adds the 10^8 case
 Benchmark inputs come from a seeded xorshift generator, never from system
 entropy or time, so runs are comparable across machines and dates (CLAUDE.md §5
 rule 5).
+
+---
+
+## Stage 2d — genesis-forward replay, 2026-08-18
+
+`cargo run --release -p zutreexo-testkit --bin genesis_replay`, depth 40,
+against a synced zebrad at tip 3,451,769.
+
+**Blocks 0..1,950,000 applied with zero errors** — 56% of chain history,
+including Sapling activation, NU5/Orchard activation, and the 2022–23
+sandblasting era. The run stopped on its 24 GiB memory ceiling, not on a fault.
+
+| height | unspent outputs | sprout | sapling | orchard | RSS | rate |
+|---|---|---|---|---|---|---|
+| 100,000 | 13,637,623 | 302,178 | 0 | 0 | 7.2 GiB | 1265 blk/s |
+| 300,000 | 28,203,068 | 911,208 | 0 | 0 | 16.2 GiB | 253 blk/s |
+| 500,000 | 21,632,152 | 1,326,758 | 26,973 | 0 | 17.3 GiB | 875 blk/s |
+| 1,000,000 | 17,214,940 | 1,533,458 | 302,300 | 0 | 17.3 GiB | 1450 blk/s |
+| 1,700,000 | 21,180,838 | 1,545,080 | 831,673 | 296 | 17.4 GiB | 1524 blk/s |
+| 1,800,000 | 20,164,946 | 1,545,100 | 1,352,874 | 4,522,350 | 17.8 GiB | 9 blk/s |
+| 1,900,000 | 14,837,461 | 1,545,186 | 1,411,280 | 23,120,491 | 20.6 GiB | 15 blk/s |
+| 1,950,000 | 15,009,468 | 1,545,196 | 1,430,900 | 31,962,354 | 24.0 GiB | — |
+
+Total wall clock 361 minutes. Fetching is not the constraint: RPC serves ~2,000
+blocks/s at eight workers, so the whole chain downloads in about half an hour.
+
+### The transparent UTXO set is large, which cuts against a Phase 5 expectation
+
+**Closes a Phase 0 gap** — Zebra does not implement `gettxoutsetinfo`, so this
+had never been measured.
+
+The set peaks near **28.2M unspent outputs around height 300,000** and settles
+around 15–21M. Early history is dominated by mining-pool payout transactions:
+blocks near height 20,000 average **257 outputs each**, a net +233 UTXOs per
+block. That was verified against the node directly rather than trusted, because
+13.6M unspent outputs at height 100,000 did not look credible.
+
+CLAUDE.md Phase 5 anticipates that "Zcash's transparent UTXO set is far smaller
+than Bitcoin's, so the transparent-side Utreexo storage win may not justify its
+proof bandwidth". At 15–28M outputs that expectation looks doubtful — Bitcoin's
+own set is of the same order. **Phase 5 should test this rather than assume it,
+and the answer may now favour keeping the transparent forest.**
+
+At **553 bytes per unspent output** the transparent side dominates memory
+entirely; the nullifier trees are a rounding error beside it until Orchard
+arrives.
+
+### Orchard nullifier growth is 20× the rate Phase 0 extrapolated from
+
+Orchard opens at NU5 (height 1,687,104) and reaches **31.96M nullifiers by
+height 1,950,000** — about 121 per block sustained across the sandblasting
+period, against the **6.192/block** measured at tip in Phase 0.
+
+This does not invalidate the depth-40 decision (D3): 2^40 absorbs it with room
+to spare, and the asymmetry argument that chose 40 over 32 is only strengthened.
+It does show the tip rate is a poor basis for extrapolation. A sustained 121/
+block would exhaust depth 32 in roughly 84 years rather than the 1,648 that D3's
+tip-rate figure implies — still survivable, but the twenty-fold gap between a
+quiet period and an attack period is the number to reason with.
+
+**It also corrects a Phase 0 estimate.** Phase 0 put full-history nullifier
+memory at 4.6–8.5 GiB from 327 B/nullifier. Orchard alone already exceeds the
+implied count at 56% of the chain.
+
+### Throughput collapses under sandblasting
+
+1,265 blk/s at height 100,000; **9 blk/s** through the sandblasting window. Two
+causes compound: ~121 nullifier insertions per block at depth 40, each touching
+two 40-node Merkle paths, and B-tree operations over a growing state.
+
+Relevant to Phase 5's per-block validation latency, and a reminder that p50 over
+quiet history would badly misrepresent the p99 a real node must survive.
+
+### What this run does not establish
+
+The cold-rebuild check ran **5 times and was skipped 75 times** — it is capped
+at 200,000 nullifiers per pool and the pools outgrow that quickly. Drift
+detection over long replays is therefore weak, and stays weak until there is a
+rebuild strategy that scales. Small-scale coverage in 2b and 2c is unaffected.
+
+Reaching tip needs either more memory headroom or a leaner UTXO index; at 553
+bytes per output, storing the precomputed leaf hash instead of the whole
+`UtxoLeaf` would cut the dominant term by roughly an order of magnitude, at the
+cost of rollback needing another source for the leaf contents.

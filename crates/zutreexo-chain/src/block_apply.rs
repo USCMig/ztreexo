@@ -12,9 +12,26 @@
 //! 4. per pool, note commitments — counted only, never accumulated;
 //! 5. emit a [`StateDelta`] carrying every preimage needed to undo the block.
 //!
-//! Step 1 before step 2 is load-bearing: it is what stops a block spending an
-//! output it creates in the same block. Zcash consensus forbids that, and doing
-//! the steps in the other order would silently permit it here.
+//! # Outputs created and spent in the same block
+//!
+//! A transaction may spend an output created by an **earlier transaction in the
+//! same block**. Both Bitcoin and Zcash permit this; mainnet block 572 does it,
+//! with `tx[10]` spending an output of `tx[8]`.
+//!
+//! This module previously claimed the opposite — that consensus forbade it —
+//! and ordered every deletion before every insertion on that basis. The claim
+//! was wrong, inferred from a Bitcoin analogy that runs the other way (CLAUDE.md
+//! §5 rule 7). Stages 2a to 2c missed it because their fixture replays all ran
+//! with `allow_unknown_spends`, which counted these as pre-window spends and
+//! moved on. The genesis-forward replay in 2d hit it after 572 blocks.
+//!
+//! Such an output is **cancelled**: it never enters the accumulator at all,
+//! rather than being inserted and immediately deleted. That is the same choice
+//! Bitcoin's Utreexo makes, and it is a specification decision rather than an
+//! optimisation — inserting then deleting would be well defined too, but the
+//! resulting forest depends on the interleaving of the two operations, so it
+//! would need an ordering rule that cancellation simply does not require. See
+//! `docs/design.md` D21.
 //!
 //! # On failure, nothing is applied
 //!
@@ -205,10 +222,21 @@ pub fn apply_block(
 
     // ---- staging: everything fallible happens before the first mutation ----
 
-    // 1a. Resolve every spend against the index. A block that references an
-    // output we cannot resolve is rejected here rather than half-applied.
+    // 1a. Resolve every spend. A block that references an output we cannot
+    // resolve is rejected here rather than half-applied.
+    //
+    // A spend may target an output this same block creates — see the module
+    // docs. Those are *cancelled*: neither the create nor the delete reaches
+    // the accumulator.
+    let created_here: BTreeMap<OutPoint, UtxoLeaf> = summary
+        .transparent_creates
+        .iter()
+        .map(|(outpoint, leaf)| (*outpoint, leaf.clone()))
+        .collect();
+
     let mut spent: Vec<(OutPoint, UtxoLeaf)> = Vec::new();
     let mut spent_hashes: Vec<Hash> = Vec::new();
+    let mut cancelled: BTreeSet<OutPoint> = BTreeSet::new();
     let mut seen: BTreeSet<OutPoint> = BTreeSet::new();
     let mut unknown_spends = 0usize;
 
@@ -220,10 +248,15 @@ pub fn apply_block(
                 vout: outpoint.vout,
             });
         }
+        // The index is consulted first: a pre-existing output is what a spend
+        // refers to, and only when there is none can the spend be intra-block.
         match state.utxo(outpoint) {
             Some(leaf) => {
                 spent_hashes.push(leaf.hash());
                 spent.push((*outpoint, leaf.clone()));
+            }
+            None if created_here.contains_key(outpoint) => {
+                cancelled.insert(*outpoint);
             }
             None if options.allow_unknown_spends => unknown_spends += 1,
             None => {
@@ -275,19 +308,23 @@ pub fn apply_block(
         delta.spent.push((*outpoint, leaf.clone()));
     }
 
-    // 2. Insert the created transparent leaves.
-    let created_hashes: Vec<Hash> = summary
+    // 2. Insert the created transparent leaves, skipping any this block also
+    // spends. A cancelled output never enters the accumulator or the index, so
+    // there is nothing to undo for it and the delta does not record it.
+    let surviving: Vec<(OutPoint, UtxoLeaf)> = summary
         .transparent_creates
         .iter()
-        .map(|(_, leaf)| leaf.hash())
+        .filter(|(outpoint, _)| !cancelled.contains(outpoint))
+        .map(|(outpoint, leaf)| (*outpoint, leaf.clone()))
         .collect();
+
+    let created_hashes: Vec<Hash> = surviving.iter().map(|(_, leaf)| leaf.hash()).collect();
     if !created_hashes.is_empty() {
         state.utxos_mut().insert(&created_hashes)?;
     }
-    for ((outpoint, leaf), hash) in summary.transparent_creates.iter().zip(&created_hashes) {
-        state.insert_utxo(*outpoint, leaf.clone());
-        let _ = hash;
-        delta.created.push((*outpoint, leaf.clone()));
+    for (outpoint, leaf) in surviving {
+        state.insert_utxo(outpoint, leaf.clone());
+        delta.created.push((outpoint, leaf));
     }
 
     // 3b. Insert nullifiers, per pool, in block order.

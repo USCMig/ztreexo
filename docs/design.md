@@ -469,6 +469,56 @@ Revisit if D10 is resolved and the transparent forest becomes load-bearing.
 
 ---
 
+## D21 — An output created and spent in one block is cancelled, not accumulated
+
+**Stage 2d. Corrects a wrong claim made in 2a.**
+
+A transaction may spend an output created by an **earlier transaction in the
+same block**. Both Bitcoin and Zcash permit it; mainnet block 572 does it, with
+`tx[10]` spending an output of `tx[8]`. Only spending an output created *later*
+in the block is forbidden.
+
+`block_apply.rs` originally ordered every deletion before every insertion and
+documented that ordering as *preventing* intra-block spends, "which Zcash
+consensus forbids". The claim was false — a Bitcoin analogy applied backwards,
+which is the specific error CLAUDE.md §5 rule 7 exists to prevent.
+
+**Why three stages missed it.** Every fixture replay in 2a, 2b and 2c ran with
+`allow_unknown_spends`, because those windows do not start at genesis and
+spends of pre-window outputs are expected there. That option counted every
+intra-block spend as a pre-window spend and moved on. The genesis-forward
+replay in 2d cannot use it, and hit the problem after 572 blocks.
+
+The general lesson is worth more than the fix: **a tolerance added for one
+legitimate reason silently absorbed a different, illegitimate case.** Anything
+of the form "ignore what we cannot resolve" should be viewed the same way.
+
+**The choice: cancellation.** Such an output never enters the accumulator or the
+index at all. The alternative — insert it, then delete it — is equally well
+defined but makes the resulting forest depend on how insertions and deletions
+interleave, so it would need an ordering rule. Cancellation needs none, which is
+why it is a *specification* choice rather than an optimisation (CLAUDE.md §5
+rule 6 would otherwise require a benchmark to justify it). Bitcoin's Utreexo
+made the same choice.
+
+Consequences:
+
+* `StateDelta` records neither the create nor the delete, because neither
+  happened — so rollback needs no special case.
+* A compact state node needs no inclusion proof for such a spend, which is a
+  small bandwidth saving that Phase 5 should measure rather than assume.
+* The naive oracle implements the same *rule*, derived from it independently
+  rather than copied. The harness caught the two disagreeing the moment the
+  implementation changed, which is what it is for.
+
+Not enforced: that the creating transaction precedes the spending one. Doing so
+needs per-transaction indices in `BlockSummary`, and this project is
+consensus-neutral — Zebra has already validated every block it is fed, so the
+ordering violation cannot arrive. **A Phase 7 consensus-enforcing
+implementation must add that check.**
+
+---
+
 ## D18 — Rollback is delta-based for nullifiers and snapshot-based for the forest
 
 **Stage 2c.**
