@@ -426,3 +426,60 @@ values to tens of millions, taking the check from 5 rebuilds on the first run to
 It is also a stronger check: successor links are rebuilt by sorting the values
 rather than copied from the stored leaves, so it catches a stale `next_value` or
 `next_index` as well as a stale internal node.
+
+---
+
+## Phase 3 — snapshots, 2026-08-19
+
+Measured on real mainnet state: a genesis replay to height 250,000, saved and
+reloaded.
+
+| | |
+|---|---|
+| replay to height 250,000 | **10.1 min** |
+| snapshot written | **3.85 GB in 12.5 s** |
+| snapshot loaded | **21.5 s** |
+| **speedup, replay → load** | **28×** |
+| unspent outputs at that height | 23,358,418 |
+| peak RSS, replay | 12.4 GiB |
+| peak RSS, load | 12.7 GiB |
+
+All four nullifier roots after loading are byte-identical to the roots the
+replay produced. Speed without that would be worthless, so it is checked rather
+than assumed.
+
+Extrapolating to tip — 27.5M unspent outputs and 54.1M nullifiers — a full
+snapshot should be roughly 6 GB, against a 7-hour replay.
+
+### Where the bytes go
+
+Nullifiers cost 32 bytes each on disk against roughly 600 in memory, because
+only the values are stored and everything else is rederived (`docs/design.md`
+D22). At height 250,000 the transparent index dominates completely: 23.4M
+outputs against 0.72M nullifiers.
+
+That ratio inverts after NU5. At tip the nullifier side is 54.1M against 27.5M
+outputs, but the nullifiers still cost less on disk than in memory by a factor
+of nearly twenty, whereas the UTXO index is stored close to its in-memory size.
+
+**A snapshot does not reduce the working set.** Loading 3.85 GB produced 12.7
+GiB resident — very close to what the replay itself used, which is the point:
+the format is a faithful round trip, not a compression scheme. Cutting the
+32.7 GiB tip footprint needs the `UtxoLeaf`-to-leaf-hash change, which is
+separate work.
+
+### Crash consistency
+
+`tests/crash.rs`, release build, 25 rounds per configuration:
+
+| writer | kills | target intact | damaged |
+|---|---|---|---|
+| atomic (temp + fsync + rename) | 25 | **25** | 0 |
+| non-atomic control (direct write) | 25 | ~5 | **~20** |
+
+7 of the 25 atomic rounds left a temp file behind, confirming the kill landed
+between `create` and `rename` rather than outside the write window.
+
+The control exists because 25 clean kills look identical whether the writer is
+atomic or the kills never landed on a write — which is exactly what the first
+version of this harness did, and it passed. See `docs/design.md` D23.

@@ -469,6 +469,82 @@ Revisit if D10 is resolved and the transparent forest becomes load-bearing.
 
 ---
 
+## D22 — A snapshot stores only the nullifier values
+
+**Phase 3.**
+
+A nullifier tree is persisted as its values in insertion order, and nothing
+else. Leaves, successor links and the internal node map are rederived on load by
+`IndexedMerkleTree::from_values_bulk`.
+
+Two reasons, and the second matters more:
+
+* **Size.** 32 bytes per nullifier against roughly 600 in memory, so the 54.1M
+  at tip occupy about 1.7 GB rather than 32 GiB.
+* **There is no redundant state on disk to disagree with itself.** A file that
+  decodes at all yields exactly one tree, so the format cannot encode a subtly
+  inconsistent accumulator — no stale successor pointer, no orphaned node, no
+  leaf count that disagrees with the leaves. Whole classes of corruption become
+  unrepresentable rather than merely detectable.
+
+This is affordable only because the bulk builder folds the tree a level at a
+time. Replaying insertions through `from_values` costs `2 * depth` hashes per
+value — 80 at depth 40 — so reloading a tip snapshot that way would take longer
+than fetching the chain again.
+
+The bulk build must produce a tree **identical** to a replayed one, not merely
+equal-rooted: a reloaded snapshot has to support further blocks, undo, and
+rollback, all of which compare exact state. `bulk_matches_sequential` asserts
+that across depths and shapes.
+
+The transparent forest cannot work this way. A Utreexo root depends on the whole
+history of insertions and deletions rather than on current membership, so there
+is no value list to replay from; it is written through `rustreexo`'s own
+serialization, whose variant-losing bug D19 had to fix first.
+
+**On NU7.** CLAUDE.md §7 asks for the vote to be checked before this format
+freezes. It has not concluded, and the conclusion is that the format does not
+depend on it: a 3× block time changes the *rate* at which nullifier sets grow,
+not the layout, and tree depth is a header field rather than a constant. What
+NU7 affects is capacity planning, which D3 already derives from transaction
+throughput rather than block count.
+
+---
+
+## D23 — Snapshots are written atomically, and the harness proves it can fail
+
+**Phase 3.**
+
+Writes go to a temporary file beside the target, are `fsync`ed, `rename`d over
+the target, and then the containing directory is `fsync`ed. `rename` is atomic
+on POSIX, so an interrupted save leaves either the previous snapshot or the new
+one. The temp file is deliberately adjacent rather than in `/tmp`, since
+`rename` is only atomic within a filesystem.
+
+CLAUDE.md's Phase 3 DoD asks for `kill -9` at any point to leave the store
+recoverable. `tests/crash.rs` spawns a writer and sends it a real `SIGKILL`
+mid-write — not an injected fault, because the claim is about what the operating
+system does with partially written data, and an in-process fault still runs
+destructors and flushes buffers.
+
+**The control is the part that makes it evidence.** Twenty-five clean kills look
+identical whether the writer is atomic or the kills simply never landed on a
+write — and the first version of this harness was exactly that: its delays
+started at 150 microseconds while the child needed twenty milliseconds to build
+state, so every kill landed during startup and the test passed having done
+nothing. So the same harness is pointed at a writer that copies straight onto
+the target with no temp file and no rename. That one produces a damaged snapshot
+in roughly 20 of 25 rounds. Same harness, same delays, same child; only the
+write strategy differs.
+
+Two guards came out of that: the test asserts a minimum number of rounds
+actually ran, and it declines to run unoptimised at all — in a debug build the
+writer cannot finish building state before the readiness timeout, so every round
+would skip. It says so rather than passing. CI runs it in the nightly release
+sweep.
+
+---
+
 ## D21 — An output created and spent in one block is cancelled, not accumulated
 
 **Stage 2d. Corrects a wrong claim made in 2a.**

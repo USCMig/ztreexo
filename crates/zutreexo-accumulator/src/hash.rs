@@ -121,6 +121,23 @@ pub fn imt_empty_leaf(pool: PoolId) -> Hash {
     finalize(params(&imt_empty_personal(pool)))
 }
 
+/// Personalization for on-disk snapshot integrity.
+///
+/// A distinct domain so a snapshot checksum can never collide with an
+/// accumulator digest (CLAUDE.md §5 rule 4). Sixteen bytes, like the rest.
+const STORE_PERSONAL: [u8; 16] = *b"ZStore__Checksum";
+
+/// Checksum over a snapshot payload.
+///
+/// Detects truncation and bit-rot on load. Not a security boundary: a snapshot
+/// is trusted-but-verifiable input, and the real check is that its roots match
+/// what replaying the chain produces.
+pub fn store_checksum(payload: &[u8]) -> Hash {
+    let mut state = params(&STORE_PERSONAL);
+    state.update(payload);
+    finalize(state)
+}
+
 /// Hashes a transparent UTXO leaf preimage.
 ///
 /// The preimage is assembled by [`crate::utreexo::UtxoLeaf`], which decides

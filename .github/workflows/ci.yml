@@ -146,6 +146,17 @@ jobs:
           cargo test --release --workspace --locked
           --test harness_replay --test corpus -- --nocapture
 
+      # CLAUDE.md Phase 3 definition of done: kill -9 during a save must leave
+      # the store recoverable with no root divergence. Release only — the
+      # harness spawns a writer and kills it mid-write, and unoptimised the
+      # writer cannot build its state before the readiness timeout, so every
+      # round would skip and the test would pass having done nothing. It
+      # declines to run in debug and says so.
+      - name: Crash harness, definition of done
+        run: >
+          cargo test --release -p zutreexo-chain --locked
+          --test crash -- --nocapture
+
       # CLAUDE.md Phase 2 definition of done: 10^6 randomised reorgs with zero
       # divergence. Runs in about 75 seconds — it was only ever slow because an
       # earlier fuzzer let the chain grow unboundedly, making each cold replay
