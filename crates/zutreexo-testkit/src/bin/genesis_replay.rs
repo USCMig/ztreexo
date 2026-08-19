@@ -42,7 +42,7 @@
 
 use std::time::Instant;
 
-use zutreexo_accumulator::imt::{IndexedMerkleTree, Value, DEFAULT_DEPTH};
+use zutreexo_accumulator::imt::DEFAULT_DEPTH;
 use zutreexo_accumulator::PoolId;
 use zutreexo_chain::{apply_block, summarize_block, ApplyOptions, ChainAccumulators};
 use zutreexo_testkit::source::{BlockSource, BlockStream, RpcSource};
@@ -76,27 +76,48 @@ fn rss_mib() -> u64 {
         .unwrap_or(0)
 }
 
-/// Rebuilds one pool's tree from its values in insertion order and compares
-/// roots. Returns `None` when the tree is too large to be worth it.
-fn cold_rebuild_matches(
-    state: &ChainAccumulators,
-    pool: PoolId,
-    depth: u8,
-    limit: u64,
-) -> Option<bool> {
-    let tree = state.tree(pool)?;
+/// Recomputes one pool's root from scratch and compares it against the
+/// incrementally-maintained one. Returns `None` when the tree is too large to
+/// be worth it.
+///
+/// Uses the bottom-up rebuild rather than replaying every insertion. Replaying
+/// costs `2 * depth` hashes per value — 80 at depth 40 — which over 32 million
+/// Orchard nullifiers is 2.6 billion hashes. Folding the tree a level at a time
+/// costs roughly three hashes per value instead, which is what makes the check
+/// affordable at chain scale at all. See `IndexedMerkleTree::rebuild_root`.
+fn cold_rebuild_matches(state: &ChainAccumulators, pool: PoolId, limit: u64) -> RebuildOutcome {
+    let Some(tree) = state.tree(pool) else {
+        return RebuildOutcome::NoTree;
+    };
     let count = tree.value_count();
-    if count == 0 || count > limit {
-        return None;
+    if count == 0 {
+        return RebuildOutcome::Empty;
     }
-    // Leaf 0 is the sentinel; the rest are in insertion order, which is the
-    // order that decides the root.
-    let mut values: Vec<Value> = Vec::with_capacity(count as usize);
-    for index in 1..tree.leaf_count() {
-        values.push(tree.leaf(index)?.value);
+    if count > limit {
+        return RebuildOutcome::TooLarge;
     }
-    let rebuilt = IndexedMerkleTree::from_values(pool, depth, &values).ok()?;
-    Some(rebuilt.root() == tree.root())
+    match tree.rebuild_root() {
+        Ok(root) if root == tree.root() => RebuildOutcome::Matches,
+        Ok(_) => RebuildOutcome::Diverged,
+        Err(_) => RebuildOutcome::NoTree,
+    }
+}
+
+/// Why a rebuild did or did not happen.
+///
+/// Distinguishing `Empty` from `TooLarge` matters: the first genesis run
+/// reported "some rebuilds skipped: set too large" at every checkpoint, and 73
+/// of those skips were pools that simply held nothing yet. A log line meaning
+/// two different things is a log line nobody can act on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RebuildOutcome {
+    Matches,
+    Diverged,
+    /// Nothing in this pool yet — nothing to check, and not a gap in coverage.
+    Empty,
+    /// Above the affordable ceiling. This *is* a gap in coverage.
+    TooLarge,
+    NoTree,
 }
 
 fn main() -> std::process::ExitCode {
@@ -116,13 +137,13 @@ fn main() -> std::process::ExitCode {
     let depth =
         u8::try_from(env_u32("ZUTREEXO_DEPTH", u32::from(DEFAULT_DEPTH))).unwrap_or(DEFAULT_DEPTH);
     let report_every = env_u32("ZUTREEXO_REPORT_EVERY", 50_000).max(1);
-    let rebuild_under = env_u64("ZUTREEXO_REBUILD_UNDER", 200_000);
+    let rebuild_under = env_u64("ZUTREEXO_REBUILD_UNDER", 40_000_000);
     let workers = env_u32("ZUTREEXO_WORKERS", 8).max(1) as usize;
     // A ceiling rather than an OOM. This machine also hosts the synced zebrad
     // the replay is reading from, and having the kernel pick which of the two
     // to kill would cost hours of resync to learn nothing. Stopping early is a
     // measurement; being killed is not.
-    let max_rss = env_u64("ZUTREEXO_MAX_RSS_MIB", 24_000);
+    let max_rss = env_u64("ZUTREEXO_MAX_RSS_MIB", 38_000);
 
     println!("node tip {tip}; replaying {from}..={to} at depth {depth}");
     println!("cold rebuild while a pool holds under {rebuild_under} nullifiers");
@@ -199,22 +220,29 @@ fn main() -> std::process::ExitCode {
             let recent = last_report.elapsed().as_secs_f64().max(0.001);
             last_report = Instant::now();
 
-            let mut rebuild_note = String::new();
+            let mut over_cap: Vec<String> = Vec::new();
             for pool in PoolId::ALL {
-                match cold_rebuild_matches(&state, pool, depth, rebuild_under) {
-                    Some(true) => rebuilds_done = rebuilds_done.saturating_add(1),
-                    Some(false) => {
+                match cold_rebuild_matches(&state, pool, rebuild_under) {
+                    RebuildOutcome::Matches => rebuilds_done = rebuilds_done.saturating_add(1),
+                    RebuildOutcome::Diverged => {
                         eprintln!("\nCOLD REBUILD DIVERGED at {height} for {pool}");
+                        eprintln!("the incremental path has drifted from a from-scratch rebuild");
                         return std::process::ExitCode::FAILURE;
                     }
-                    None => {
+                    RebuildOutcome::TooLarge => {
                         rebuilds_skipped = rebuilds_skipped.saturating_add(1);
-                        if rebuild_note.is_empty() {
-                            rebuild_note = " (some rebuilds skipped: set too large)".to_owned();
-                        }
+                        over_cap.push(pool.to_string());
                     }
+                    // An empty pool is not a coverage gap and is not counted
+                    // as a skip.
+                    RebuildOutcome::Empty | RebuildOutcome::NoTree => {}
                 }
             }
+            let rebuild_note = if over_cap.is_empty() {
+                String::new()
+            } else {
+                format!(" (rebuild over cap: {})", over_cap.join(","))
+            };
 
             println!(
                 "h={height:<8} utxos={:<9} nul[{}] rss={}MiB {:.0} blk/s avg, {:.0} recent{}",

@@ -761,6 +761,99 @@ impl IndexedMerkleTree {
         })
     }
 
+    /// Recomputes the root from this tree's values, bottom-up, without using
+    /// the cached internal nodes.
+    ///
+    /// # Why this exists
+    ///
+    /// The differential harness proves the incremental path has not drifted by
+    /// rebuilding from scratch and comparing. Doing that with
+    /// [`IndexedMerkleTree::from_values`] costs `2 * depth` hashes per value —
+    /// 80 at depth 40 — because it replays every insertion including both
+    /// Merkle path updates. Over 32 million Orchard nullifiers that is 2.6
+    /// billion hashes, which is why the genesis replay could only afford the
+    /// check below 200,000 values and skipped it 75 times out of 80.
+    ///
+    /// A final root does not need the journey. Leaves occupy indices `0..n`
+    /// contiguously, so the tree can be folded a level at a time: `n` leaf
+    /// hashes, then about `n` more to fold the dense prefix, then one hash per
+    /// remaining level against a precomputed empty-subtree digest. Roughly
+    /// `3n` hashes rather than `80n` — about **27× cheaper**, which moves the
+    /// affordable ceiling from hundreds of thousands to tens of millions.
+    ///
+    /// # It is also a better check than it was
+    ///
+    /// The successor links are rebuilt by sorting the values, not copied from
+    /// the stored leaves. So this catches a stale `next_value` or `next_index`
+    /// as well as a stale internal node — two different ways the incremental
+    /// path can rot — and it reaches the answer by a different route than
+    /// insertion does.
+    ///
+    /// It still shares this crate's hashing, so it is not the independent
+    /// oracle that `zutreexo-testkit`'s naive model provides at small scale.
+    pub fn rebuild_root(&self) -> Result<Hash, ImtError> {
+        // Sorted view of every value, paired with the leaf index holding it.
+        // The sentinel participates: it is the head of the linked list.
+        let mut sorted: Vec<(Value, u64)> = Vec::with_capacity(self.leaves.len());
+        for (index, leaf) in self.leaves.iter().enumerate() {
+            let index = u64::try_from(index)
+                .map_err(|_| ImtError::CorruptTree("leaf index exceeds u64"))?;
+            sorted.push((leaf.value, index));
+        }
+        sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+        // Rebuild each leaf from its successor in sorted order, rather than
+        // trusting the links the incremental path wrote.
+        let mut rebuilt: Vec<Leaf> = vec![Leaf::SENTINEL; self.leaves.len()];
+        for (position, (value, index)) in sorted.iter().enumerate() {
+            let (next_value, next_index) = match sorted.get(position.saturating_add(1)) {
+                Some((next, at)) => (*next, *at),
+                // The maximum has no successor; zero means exactly that.
+                None => (Value::ZERO, 0),
+            };
+            let slot = usize::try_from(*index)
+                .ok()
+                .and_then(|i| rebuilt.get_mut(i))
+                .ok_or(ImtError::CorruptTree("value index out of range"))?;
+            *slot = Leaf {
+                value: *value,
+                next_value,
+                next_index,
+            };
+        }
+
+        let mut level: Vec<Hash> = rebuilt.iter().map(|leaf| leaf.hash(self.pool)).collect();
+        if level.is_empty() {
+            return Ok(self.zero(self.depth));
+        }
+
+        for height in 0..self.depth {
+            if level.len() == 1 {
+                // The dense prefix has collapsed to one node covering
+                // `2^height` leaves; everything above is empty subtrees.
+                let mut node = *level.first().ok_or(ImtError::CorruptTree("empty level"))?;
+                for remaining in height..self.depth {
+                    node = hash::imt_node(self.pool, &node, &self.zero(remaining));
+                }
+                return Ok(node);
+            }
+
+            let filler = self.zero(height);
+            let mut parents = Vec::with_capacity(level.len().div_ceil(2));
+            for pair in level.chunks(2) {
+                let left = *pair.first().ok_or(ImtError::CorruptTree("empty chunk"))?;
+                let right = pair.get(1).copied().unwrap_or(filler);
+                parents.push(hash::imt_node(self.pool, &left, &right));
+            }
+            level = parents;
+        }
+
+        level
+            .first()
+            .copied()
+            .ok_or(ImtError::CorruptTree("fold produced no root"))
+    }
+
     /// Reverses the most recent [`IndexedMerkleTree::insert`].
     ///
     /// # Why this is possible here and not for the transparent forest
@@ -1002,6 +1095,85 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[24..].copy_from_slice(&n.to_be_bytes());
         Value::from_bytes(bytes)
+    }
+
+    // ---- rebuild_root ----
+
+    /// The fast bottom-up rebuild must agree with the incremental root, at
+    /// every size and shape. If it does not, the cheaper check the genesis
+    /// replay depends on is worthless.
+    #[test]
+    fn rebuild_agrees_with_the_incremental_root() {
+        for depth in [1u8, 2, 5, 8, 12] {
+            for count in [0u64, 1, 2, 3, 7, 8, 9, 31, 100] {
+                let capacity = 1u64 << depth;
+                if count.saturating_add(1) > capacity {
+                    continue;
+                }
+                let mut tree = IndexedMerkleTree::with_depth(POOL, depth).unwrap();
+                for n in 1..=count {
+                    tree.insert(v(n)).unwrap();
+                }
+                assert_eq!(
+                    tree.rebuild_root().unwrap(),
+                    tree.root(),
+                    "depth {depth}, {count} values: rebuild disagrees"
+                );
+            }
+        }
+    }
+
+    /// Insertion order changes the root, so the rebuild must track it rather
+    /// than depending only on the set of values.
+    #[test]
+    fn rebuild_tracks_insertion_order() {
+        let build = |order: &[u64]| {
+            let mut tree = IndexedMerkleTree::with_depth(POOL, 8).unwrap();
+            for n in order {
+                tree.insert(v(*n)).unwrap();
+            }
+            (tree.root(), tree.rebuild_root().unwrap())
+        };
+        let (root_a, rebuilt_a) = build(&[5, 1, 9, 3]);
+        let (root_b, rebuilt_b) = build(&[9, 5, 3, 1]);
+
+        assert_eq!(root_a, rebuilt_a);
+        assert_eq!(root_b, rebuilt_b);
+        assert_ne!(root_a, root_b, "order should change the root");
+    }
+
+    /// Values that stress the ordering: the maximum, and near-adjacent values.
+    #[test]
+    fn rebuild_handles_boundary_values() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, 8).unwrap();
+        tree.insert(Value::MAX).unwrap();
+        tree.insert(v(1)).unwrap();
+        tree.insert(v(2)).unwrap();
+        assert_eq!(tree.rebuild_root().unwrap(), tree.root());
+    }
+
+    /// A corrupted successor pointer must be caught. This is the failure the
+    /// rebuild exists to detect, and it is invisible to a root recomputed from
+    /// the stored links.
+    #[test]
+    fn rebuild_detects_a_stale_successor_link() {
+        let mut tree = IndexedMerkleTree::with_depth(POOL, 8).unwrap();
+        for n in 1..=6u64 {
+            tree.insert(v(n)).unwrap();
+        }
+        assert_eq!(tree.rebuild_root().unwrap(), tree.root());
+
+        // Corrupt one leaf's link the way a drifting incremental path would,
+        // rewriting the cached nodes so the tree stays self-consistent.
+        let mut leaf = tree.leaf(3).unwrap();
+        leaf.next_index = leaf.next_index.wrapping_add(1);
+        tree.set_leaf(3, leaf).unwrap();
+
+        assert_ne!(
+            tree.rebuild_root().unwrap(),
+            tree.root(),
+            "a stale successor link went undetected"
+        );
     }
 
     // ---- undo_insert ----

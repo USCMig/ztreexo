@@ -34,7 +34,7 @@ infrastructure, `fix/<topic>` for defects.
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
-| 2d | Genesis-forward replay | `phase-2d-replay` | **partial** — 1.95M blocks (56%) applied with zero errors; stopped on a memory ceiling, not a fault |
+| 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, peak 32.7 GiB |
 | 3 | Persistence, snapshots, crash consistency | — | not started |
 | 4 | Bridge node (proof serving) | — | not started |
 | 5 | Compact state node, published benchmarks | — | not started |
@@ -157,14 +157,19 @@ Fixed by cancellation (`docs/design.md` D21), pinned by
 `crates/zutreexo-chain/tests/intra_block_spend.rs`, which runs in milliseconds
 where the discovery took six hours.
 
-**Reaching tip needs less memory per unspent output.** The run stopped at 1.95M
-blocks on a deliberate 24 GiB ceiling — deliberate because this machine also
-hosts the zebrad being read from, and letting the kernel choose between them
-would cost a resync to learn nothing. At 553 bytes per output the transparent
-index dominates; storing the precomputed leaf hash rather than the whole
-`UtxoLeaf` would cut that by roughly an order of magnitude, at the cost of
-rollback needing another source for leaf contents. That is the next decision for
-2d.
+**Phase 2 is complete.** The amended DoD is met: genesis-to-tip with zero apply
+errors, 71 from-scratch rebuilds all matching, parse agreement with `zebrad` at
+checkpoints (2b), and two runs byte-identical at every shared checkpoint. Peak
+memory 32.7 GiB — the first attempt stopped at 56% on a 24 GiB ceiling, so the
+headroom mattered.
+
+**Memory is the constraint on doing this routinely.** 32.7 GiB is fine for an
+occasional verification run and not fine for CI or a laptop. At roughly 550
+bytes per unspent output the transparent index dominates early history; storing
+the precomputed leaf hash rather than the whole `UtxoLeaf` would cut that by
+about an order of magnitude, at the cost of rollback needing another source for
+leaf contents. Worth doing before Phase 3 freezes an on-disk format that will
+inherit the same shape.
 
 **The transparent side is blocked upstream.** `rustreexo` 0.6.0 generates
 invalid inclusion proofs for any leaf whose sibling has been deleted, reproduced
