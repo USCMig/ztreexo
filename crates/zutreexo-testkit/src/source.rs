@@ -315,3 +315,222 @@ impl<S: BlockSource> Iterator for BlockStream<'_, S> {
         self.buffered.pop_front()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use super::*;
+    use std::net::{Shutdown, TcpListener};
+
+    fn write_fixture(name: &str, text: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("zutreexo-source-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}.jsonl"));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    // ---------- FixtureSource ----------
+
+    #[test]
+    fn fixture_source_loads_hex_lines_in_order() {
+        let path = write_fixture("basic", "aabb\nccdd\n");
+        let source = FixtureSource::load(&path, 100).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(source.tip().unwrap(), 101);
+        assert_eq!(source.raw_block(100).unwrap(), vec![0xaa, 0xbb]);
+        assert_eq!(source.raw_block(101).unwrap(), vec![0xcc, 0xdd]);
+    }
+
+    #[test]
+    fn fixture_source_skips_blank_lines_and_strips_quotes() {
+        let path = write_fixture("quoted", "\"aabb\"\n\n\"ccdd\"\n");
+        let source = FixtureSource::load(&path, 0).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(source.tip().unwrap(), 1);
+        assert_eq!(source.raw_block(0).unwrap(), vec![0xaa, 0xbb]);
+        assert_eq!(source.raw_block(1).unwrap(), vec![0xcc, 0xdd]);
+    }
+
+    #[test]
+    fn fixture_source_rejects_bad_hex_at_load_time() {
+        let path = write_fixture("bad-hex", "nothex\n");
+        let error = FixtureSource::load(&path, 0).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(error, SourceError::Parse { height: 0, .. }));
+    }
+
+    #[test]
+    fn fixture_source_reports_missing_outside_its_range() {
+        let path = write_fixture("range", "aabb\n");
+        let source = FixtureSource::load(&path, 50).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(matches!(
+            source.raw_block(49),
+            Err(SourceError::Missing { height: 49 })
+        ));
+        assert!(matches!(
+            source.raw_block(51),
+            Err(SourceError::Missing { height: 51 })
+        ));
+    }
+
+    // ---------- BlockStream ----------
+
+    #[test]
+    fn block_stream_yields_every_height_once_in_order() {
+        let path = write_fixture("stream", "00\n01\n02\n03\n04\n");
+        let source = FixtureSource::load(&path, 10).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        // A window (2) smaller than the range (5) forces multiple refills.
+        let stream = BlockStream::new(&source, 10, 14, 2, 3);
+        let heights: Vec<u32> = stream.map(|(h, _)| h).collect();
+        assert_eq!(heights, vec![10, 11, 12, 13, 14]);
+    }
+
+    #[test]
+    fn block_stream_carries_a_missing_height_through_in_place() {
+        // The fixture only covers 10..=11; asking through 12 leaves a gap.
+        let path = write_fixture("stream-gap", "00\n01\n");
+        let source = FixtureSource::load(&path, 10).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let stream = BlockStream::new(&source, 10, 12, 4, 2);
+        let results: Vec<Fetched> = stream.collect();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, 10);
+        assert!(results[0].1.is_ok());
+        assert_eq!(results[2].0, 12);
+        assert!(matches!(
+            results[2].1,
+            Err(SourceError::Missing { height: 12 })
+        ));
+    }
+
+    #[test]
+    fn block_stream_on_an_empty_range_yields_nothing() {
+        let path = write_fixture("stream-empty", "00\n");
+        let source = FixtureSource::load(&path, 0).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        // end < start: nothing should be produced.
+        let stream = BlockStream::new(&source, 5, 4, 8, 4);
+        assert_eq!(stream.count(), 0);
+    }
+
+    // ---------- RpcSource, against a fake zebrad ----------
+
+    /// Accepts exactly one connection, drains the request, writes back a
+    /// canned HTTP/1.1 response, then closes — enough to drive
+    /// `RpcSource::call`'s framing without a real `zebrad`.
+    fn fake_zebrad(body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let response = format!("HTTP/1.1 200 OK\r\n\r\n{body}");
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.shutdown(Shutdown::Write);
+            }
+        });
+        addr
+    }
+
+    #[test]
+    fn rpc_source_decodes_a_successful_getblock() {
+        let addr = fake_zebrad(r#"{"result":"deadbeef","error":null}"#);
+        let source = RpcSource::new(&addr);
+        assert_eq!(source.raw_block(1).unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[test]
+    fn rpc_source_turns_an_rpc_error_field_into_response_error() {
+        let addr = fake_zebrad(r#"{"result":null,"error":{"code":-5,"message":"not found"}}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.raw_block(7),
+            Err(SourceError::Response { height: 7, .. })
+        ));
+    }
+
+    #[test]
+    fn rpc_source_treats_a_missing_result_as_missing_block() {
+        let addr = fake_zebrad(r#"{"result":null,"error":null}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.raw_block(9),
+            Err(SourceError::Missing { height: 9 })
+        ));
+    }
+
+    #[test]
+    fn rpc_source_rejects_a_result_that_is_not_valid_hex() {
+        let addr = fake_zebrad(r#"{"result":"not-hex!","error":null}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.raw_block(3),
+            Err(SourceError::Parse { height: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn rpc_source_reads_the_tip_out_of_getblockchaininfo() {
+        let addr = fake_zebrad(r#"{"result":{"blocks":424242}}"#);
+        let source = RpcSource::new(&addr);
+        assert_eq!(source.tip().unwrap(), 424_242);
+    }
+
+    #[test]
+    fn rpc_source_fails_loudly_when_the_response_has_no_tip() {
+        let addr = fake_zebrad(r#"{"result":{}}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(source.tip(), Err(SourceError::Transport(_))));
+    }
+
+    #[test]
+    fn rpc_source_fails_loudly_on_malformed_json() {
+        let addr = fake_zebrad("not json");
+        let source = RpcSource::new(&addr);
+        assert!(matches!(source.tip(), Err(SourceError::Transport(_))));
+    }
+
+    #[test]
+    fn rpc_source_fails_loudly_with_no_header_terminator() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(b"not even an http response");
+                let _ = stream.shutdown(Shutdown::Write);
+            }
+        });
+
+        let source = RpcSource::new(&addr);
+        assert!(matches!(source.tip(), Err(SourceError::Transport(_))));
+    }
+
+    #[test]
+    fn rpc_source_reports_a_refused_connection_as_transport_error() {
+        // Bind then drop: guarantees a port nothing is listening on.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        drop(listener);
+
+        let source = RpcSource::new(&addr);
+        assert!(matches!(source.tip(), Err(SourceError::Transport(_))));
+    }
+
+    #[test]
+    fn rpc_source_default_points_at_the_conventional_local_port() {
+        assert_eq!(RpcSource::default().address, "127.0.0.1:8232");
+    }
+}

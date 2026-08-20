@@ -281,7 +281,7 @@ fn a_foreign_file_is_not_mistaken_for_a_snapshot() {
 }
 
 #[test]
-fn an_unknown_version_is_refused_not_guessed() {
+fn an_unknown_version_over_a_stale_checksum_is_caught_by_the_checksum() {
     let state = populated(10);
     let path = scratch("version.zst");
     save(&state, &path).unwrap();
@@ -290,9 +290,12 @@ fn an_unknown_version_is_refused_not_guessed() {
     bytes[8] = 99; // the version byte, immediately after the magic
     std::fs::write(&path, &bytes).unwrap();
 
-    // The checksum fails first, which is correct — but a version bump with a
-    // valid checksum must also be refused, so check that path directly too.
-    assert!(load(&path).is_err());
+    // Editing the byte in place leaves the recorded checksum describing the
+    // old payload, so this is caught as corruption and never reaches the
+    // version check. That is the right answer for this input — but it is *not*
+    // a test of version refusal, which needs a payload that verifies. See
+    // `an_unknown_version_with_a_valid_checksum_is_refused` below.
+    assert!(matches!(load(&path), Err(StoreError::ChecksumMismatch)));
 }
 
 #[test]
@@ -333,24 +336,128 @@ fn truncation_at_any_length_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn trailing_bytes_are_rejected() {
+fn bytes_spliced_in_before_the_checksum_are_caught_as_corruption() {
     let state = populated(10);
     let path = scratch("trailing.zst");
     save(&state, &path).unwrap();
 
     let mut bytes = std::fs::read(&path).unwrap();
-    // Append after the checksum: the payload still verifies, so only an
-    // explicit trailing-bytes check catches this.
+    // Splicing bytes in ahead of the recorded checksum puts them *inside* the
+    // checksummed payload, so this is corruption, not trailing data, and the
+    // checksum is what rejects it. The explicit trailing-bytes check in
+    // `decode` is exercised by
+    // `trailing_bytes_behind_a_valid_checksum_are_rejected` instead.
     let checksum_start = bytes.len() - 32;
     let checksum: Vec<u8> = bytes.split_off(checksum_start);
     bytes.extend_from_slice(b"extra");
     bytes.extend_from_slice(&checksum);
     std::fs::write(&path, &bytes).unwrap();
 
-    assert!(load(&path).is_err(), "trailing bytes were accepted");
+    assert!(matches!(load(&path), Err(StoreError::ChecksumMismatch)));
 }
 
 #[test]
 fn a_missing_file_is_an_error() {
     assert!(load(&scratch("does-not-exist.zst")).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Rejection *past* the checksum.
+//
+// `load` verifies magic and checksum before handing the payload to `decode`,
+// so every structural check inside `decode` is unreachable by any edit that
+// disturbs the payload — the checksum fires first. Three tests above were
+// written believing otherwise, and passed on `ChecksumMismatch` while the
+// paths they were named for never executed. Coverage is what surfaced it: the
+// version, trailing-byte and truncation arms sat at zero with green tests
+// above them.
+//
+// Reaching those arms means forging a *well-formed* file: edit the payload,
+// then reseal it with a checksum that matches. That is also the realistic
+// adversary — anyone who can hand a node a snapshot can compute a checksum —
+// so these are the cases that matter, not the ones a bit-flip produces.
+// ---------------------------------------------------------------------------
+
+/// Re-attaches a valid checksum to a payload, producing a file `load` will
+/// accept as authentic and pass to `decode`.
+fn reseal(payload: &[u8]) -> Vec<u8> {
+    let mut out = payload.to_vec();
+    out.extend_from_slice(zutreexo_accumulator::hash::store_checksum(payload).as_slice());
+    out
+}
+
+/// Splits a saved file into its payload, discarding the trailing checksum.
+fn payload_of(path: &std::path::Path) -> Vec<u8> {
+    let bytes = std::fs::read(path).unwrap();
+    bytes[..bytes.len() - 32].to_vec()
+}
+
+#[test]
+fn an_unknown_version_with_a_valid_checksum_is_refused() {
+    let state = populated(10);
+    let path = scratch("version-sealed.zst");
+    save(&state, &path).unwrap();
+
+    let mut payload = payload_of(&path);
+    payload[8] = 99; // the version byte, immediately after the magic
+    std::fs::write(&path, reseal(&payload)).unwrap();
+
+    // Not merely `is_err`: the point is *which* check fired. A build that
+    // silently read a future format would also be an error eventually, at some
+    // unrelated field, and that is exactly the confusion the version byte
+    // exists to prevent.
+    assert!(matches!(
+        load(&path),
+        Err(StoreError::UnsupportedVersion { found: 99 })
+    ));
+}
+
+#[test]
+fn trailing_bytes_behind_a_valid_checksum_are_rejected() {
+    let state = populated(10);
+    let path = scratch("trailing-sealed.zst");
+    save(&state, &path).unwrap();
+
+    let mut payload = payload_of(&path);
+    payload.extend_from_slice(b"extra");
+    std::fs::write(&path, reseal(&payload)).unwrap();
+
+    // A decoder that stops when it has what it wants would accept this and
+    // ignore the tail, which makes two different files decode to one state —
+    // the property that lets a snapshot smuggle data past a checksum.
+    match load(&path) {
+        Err(StoreError::Malformed { reason }) => {
+            assert!(reason.contains("trailing"), "wrong reason: {reason}");
+        }
+        other => panic!("trailing bytes were not rejected: {other:?}"),
+    }
+}
+
+#[test]
+fn truncation_behind_a_valid_checksum_reaches_the_decoder() {
+    let state = populated(10);
+    let path = scratch("truncated-sealed.zst");
+    save(&state, &path).unwrap();
+
+    let full = payload_of(&path);
+    let cut = scratch("truncated-sealed-cut.zst");
+
+    // From just past the magic — below that `load` answers `NotASnapshot`
+    // without consulting the decoder, which is a different test.
+    let mut reached = 0;
+    for length in (9..full.len()).step_by(7) {
+        std::fs::write(&cut, reseal(&full[..length])).unwrap();
+        match load(&cut) {
+            // Every one of these is `decode` refusing a short field, which is
+            // the proof the payload got past the checksum.
+            Err(StoreError::Truncated { .. }) | Err(StoreError::Malformed { .. }) => reached += 1,
+            Err(StoreError::UnsupportedVersion { .. }) => {}
+            other => panic!("truncation to {length} bytes gave {other:?}"),
+        }
+    }
+
+    // Without this the loop would be vacuous if `load` started rejecting
+    // everything earlier — the failure mode that let the three tests above
+    // pass while testing nothing.
+    assert!(reached > 0, "no truncation reached the decoder");
 }

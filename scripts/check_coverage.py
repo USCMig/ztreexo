@@ -114,6 +114,24 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 95.7,
         "min_branches": 27,  # measured 29/32
     },
+    # Phase 3's on-disk snapshot format. It earns an entry rather than being
+    # absorbed into the workspace average because deserialising a file someone
+    # else wrote is the crate's only untrusted-input surface, and an
+    # unexercised arm there is a parser accepting something it should refuse.
+    #
+    # The floor started life 4 points lower. `load` verifies magic and checksum
+    # before calling `decode`, so every structural check inside `decode` is
+    # unreachable by any edit that disturbs the payload — the checksum fires
+    # first. Three tests were written believing otherwise and passed on
+    # ChecksumMismatch while the arms they were named for never ran. This gate
+    # is what surfaced it: green tests, zero coverage, directly above each
+    # other. Reaching those arms needs a forged file that reseals a valid
+    # checksum over an edited payload, which is also the realistic adversary.
+    "crates/zutreexo-chain/src/store.rs": {
+        "regions": 89.1,
+        "lines": 88.6,
+        "min_branches": 18,  # measured 20/24
+    },
     # The differential harness and the reorg fuzzer. Test infrastructure, but
     # also the project's primary correctness signal (CLAUDE.md §5 rule 2): a
     # silent regression in either disables what catches everything else.
@@ -143,18 +161,60 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "regions": 95.4,
         "lines": 97.3,
     },
+    # Stage 2d's zebrad RPC client (BlockStream/RpcSource/FixtureSource).
+    # Exercised against a real TCP server in the test module — a background
+    # thread standing in for zebrad — rather than against the network, so this
+    # runs the same in CI as anywhere else.
+    "crates/zutreexo-testkit/src/source.rs": {
+        "regions": 93.7,
+        "lines": 96.7,
+        "min_branches": 10,  # measured 12/16
+    },
+    # Stage 2d's genesis-to-tip replay binary. This is an operational entry
+    # point, not library code: `main` parses env vars, opens a TCP connection
+    # to a live, synced `zebrad`, and drives a run that takes on the order of
+    # a day. No test environment has that node, so this can never be
+    # exercised the way a fixture-gated file eventually is — it is not a
+    # "missing fixture", it is structurally out of reach for the automated
+    # suite. `never_measured` records that explicitly instead of letting the
+    # workspace average absorb it silently. The logic worth covering (RPC
+    # framing, response parsing, block ordering) lives in source.rs instead,
+    # which this binary only calls.
+    "crates/zutreexo-testkit/src/bin/genesis_replay.rs": {
+        "never_measured": (
+            "operational entry point — needs a live synced zebrad, which no "
+            "test environment has. See src/source.rs for the logic this "
+            "binary drives, covered there instead."
+        ),
+    },
 }
 
-# Measured 93.48 / 92.22 / 80.37 in the CI profile at stage 2c, after
-# `cargo llvm-cov clean`. Every per-file figure rose from 2b; the workspace
-# total rose with them.
+# Measured 89.66 / 88.88 / 76.81 in the CI profile at Phase 3, after
+# `cargo llvm-cov clean`. Confirmed stable across two back-to-back clean
+# measurements — identical to four decimal places — before being used as the
+# new floor.
+#
+# Regions and lines fall slightly against stage 2d's 90.12 / 89.34 despite
+# store.rs being well covered in its own right, because store.rs is 506 regions
+# at 89.13% and the average it joined was 90.12%. Adding a well-tested file can
+# still lower a mean; that is arithmetic, not a regression, and the per-file
+# floor above is what actually guards the new code.
+#
+# Branches went the other way, 76.42 -> 76.81, from the forged-snapshot tests
+# described in the store.rs entry.
+#
+# The 2d note about genesis_replay.rs still applies: it sits at a permanent,
+# structural 0% in the total (272 regions / 161 lines / 20 branches) that no
+# amount of testing can raise.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 93.1,
-    "lines": 91.9,
+    "regions": 89.6,
+    "lines": 88.8,
     # Percentage, not a count: the workspace denominator grows as code is added,
-    # so an absolute floor here would have to be edited on every commit. Carries
-    # extra tolerance for the branch jitter described below.
-    "branches": 78.5,
+    # so an absolute floor here would have to be edited on every commit. Set
+    # 0.3 below the measurement rather than at the usual one-decimal truncation,
+    # because this is the one workspace metric the jitter described below can
+    # move, and a flaky gate gets switched off.
+    "branches": 76.5,
 }
 
 # ---------------------------------------------------------------------------
@@ -255,6 +315,16 @@ def main(argv: list[str]) -> int:
             if not filename.endswith(suffix):
                 continue
             matched.add(suffix)
+
+            # Structurally unmeasurable (e.g. needs a live node no test
+            # environment has) is a different claim from "never ran in this
+            # particular run" — it never gets a fixture to be gated on, so it
+            # is reported and skipped rather than routed through the
+            # unexercised()/floor checks below, neither of which apply.
+            reason = floors.get("never_measured")
+            if reason is not None:
+                print(f"  {suffix}: NOT MEASURED BY DESIGN — {reason}")
+                continue
 
             # Diagnose "never ran" before comparing against floors, so the
             # message names the cause instead of three derived symptoms.

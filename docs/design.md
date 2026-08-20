@@ -545,6 +545,72 @@ sweep.
 
 ---
 
+## D24 — A checksum in front of a parser hides every check behind it
+
+**Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage
+gate rather than by any test.
+
+`load` verifies the magic bytes and the payload checksum before handing the
+payload to `decode`. That ordering is right — a wrong-format file should say so
+rather than fail a checksum, and corruption should be named as corruption. The
+consequence is easy to miss: **every structural check inside `decode` becomes
+unreachable by any edit that disturbs the payload.** The checksum fires first,
+every time.
+
+Three of the twelve round-trip tests were written without noticing this, and all
+three passed:
+
+| test | intended check | check that actually fired |
+|---|---|---|
+| `an_unknown_version_is_refused_not_guessed` | `UnsupportedVersion` | `ChecksumMismatch` |
+| `trailing_bytes_are_rejected` | trailing-byte arm in `decode` | `ChecksumMismatch` |
+| `truncation_at_any_length_is_an_error_not_a_panic` | `Truncated` arms in `decode` | `ChecksumMismatch` |
+
+Two of them asserted only `is_err()`, which is what let it through. Worse, the
+version test carried a comment claiming it checked the valid-checksum path "directly
+too" — it did not, and the comment is the reason nobody looked again. The
+trailing-byte test's comment asserted "the payload still verifies", which is
+false: splicing bytes in ahead of the recorded checksum puts them *inside* the
+checksummed region.
+
+Nothing was wrong with `store.rs`. The arms all work. What was wrong is that
+they were **never executed**, so nothing would have noticed if they stopped
+working — and `decode` is the crate's only untrusted-input surface, which is
+precisely where an unexercised arm means a parser accepting what it should
+refuse.
+
+**Reaching those arms requires forging a well-formed file:** edit the payload,
+then reseal it with a checksum that matches. That is also the realistic
+adversary — anyone who can hand a node a snapshot can compute a checksum — so
+these are the cases that matter, and the bit-flip cases the original tests
+constructed are the ones that do not. The three tests were renamed to what they
+actually verify (they are still worth keeping; checksum-first ordering is a real
+property) and three new tests were added behind `reseal`.
+
+Both new tests were then **mutation-checked**: disabling the version comparison
+and disabling the trailing-byte comparison each turn exactly one new test red
+while every original test stays green. That last part is the finding restated as
+evidence — the old tests cannot see either bug.
+
+Two things generalise:
+
+* **`assert!(x.is_err())` is not a test of which error.** It is a test that
+  something went wrong somewhere. Where a function has several rejection paths,
+  the assertion has to name the variant, or it silently accepts the wrong one.
+* **A validation ordered behind a cheaper, broader check needs tests that
+  deliberately satisfy the cheaper check.** Otherwise the broader check masks
+  the narrower one and the narrower one rots untested. This is a general shape,
+  not a snapshot-format quirk; Phase 6's deserialisation fuzzing will hit the
+  same wall and must reseal too, or it will spend its whole budget bouncing off
+  the checksum.
+
+The mechanism that caught it was the per-file coverage floor — green tests with
+zero coverage, sitting directly above each other. It is the third time on this
+project that a test has passed for a reason other than its name (see D17 and
+D21), and the first time a non-test tool found one.
+
+---
+
 ## D21 — An output created and spent in one block is cancelled, not accumulated
 
 **Stage 2d. Corrects a wrong claim made in 2a.**
