@@ -38,13 +38,22 @@ infrastructure, `fix/<topic>` for defects.
 | 3 | Persistence, snapshots, crash consistency | `phase-3-persistence` | **complete** — DoD met: 25 SIGKILLs mid-save, store intact every time, with a non-atomic control proving the harness detects corruption. Merged `main` 2026-08-20; the merge's coverage run found three snapshot tests passing for the wrong reason ([D24](docs/design.md)) |
 | 4a | Proof bundle + compact state node verification core | `phase-4a-bundle` | **complete** — a roots-only node tracks the bridge byte-for-byte over real mainnet blocks; bandwidth measured and it is unflattering ([`docs/benchmarks.md`](docs/benchmarks.md)) |
 | 4b | Bridge service transport (gRPC/JSON-RPC), Zaino integration | — | not started |
-| 5 | Compact state node, published benchmarks | — | not started |
+| 5a | Headline measurement: nullifier-check cost vs gap length | `phase-4a-bundle` | **complete** — the claim holds decisively for spend-status queries (317x to 31,705x at a year's gap) and barely at all for full sync (<=14.7% of bytes, 0% of trial decryption) |
+| 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | — | not started |
 | 6 | Fuzzing, DoS analysis, privacy review | — | not started |
 | 7 | ZIP draft — gated on 5 and 6 | — | not started |
 
 ## Known gaps, carried deliberately
 
 These are open and tracked here rather than discovered later.
+
+**The headline result is real but gated on Phase 7.** A non-membership proof is
+only meaningful against a trusted root, and nothing commits accumulator roots to
+the chain today. A wallet that trusts a bridge for the root could just ask the
+bridge whether the nullifier is spent and skip the accumulator entirely.
+Multi-bridge root comparison weakens the trust assumption without removing it.
+So the 31,705x in [`docs/benchmarks.md`](docs/benchmarks.md) measures bandwidth,
+not trust, and does not by itself justify deployment before the fork.
 
 **The compact-node bandwidth overhead is 170% and rising with height.** A
 compact node downloads 1.7x as much in proofs as in blocks over heights

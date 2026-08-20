@@ -604,3 +604,103 @@ The headline Phase 5 result is **nullifier-check cost against gap length** for a
 block since last sync. That is a different query by a different actor, and
 nothing here bears on it. These numbers are the cost of a compact node doing
 initial block download, which is the axis where an accumulator is most exposed.
+
+---
+
+## Phase 5a — the headline: nullifier-check cost against gap length, 2026-08-20
+
+CLAUDE.md Phase 5 calls this "the headline result". Measured by
+`crates/zutreexo-testkit/src/bin/gap_cost.rs` over the most recent 400,001
+blocks — heights 3,054,402 to 3,454,402, roughly a year at 75 s/block.
+
+```
+ZUTREEXO_RPC=127.0.0.1:8232 ZUTREEXO_GAP_BLOCKS=400000 \
+  cargo run --release -p zutreexo-testkit --bin gap_cost
+```
+
+| | |
+|---|---|
+| nullifiers revealed | 1,349,457 (3.4 per block) |
+| nullifier bytes | 43,182,624 |
+| compact-block bytes | 293,557,540 |
+| **nullifiers as a share of a compact sync** | **14.7%** |
+| non-membership proof, depth 40 | **1,362 bytes** |
+| sparse-path variant (projected) | 631 bytes |
+
+### The answer depends on which question is asked, so both are reported
+
+**Framing A — the wallet only wants spend status.** A watch-only balance, or
+the check before attempting a spend. Scanning is `O(gap)`; proofs are `O(notes)`
+and flat.
+
+| gap (blocks) | nullifiers | scan bytes | 1 note | 10 notes | 100 notes |
+|---|---|---|---|---|---|
+| 10 | 57 | 1,824 | proofs 1.3× | scan 7.5× | scan 74.7× |
+| 100 | 839 | 26,848 | proofs 19.7× | proofs 2.0× | scan 5.1× |
+| 1,000 | 9,094 | 291,008 | proofs 213.7× | proofs 21.4× | proofs 2.1× |
+| 10,000 | 68,448 | 2,190,336 | proofs 1,608× | proofs 161× | proofs 16.1× |
+| 100,000 | 458,491 | 14,671,712 | proofs 10,772× | proofs 1,077× | proofs 108× |
+| 400,000 | 1,349,457 | 43,182,624 | proofs 31,705× | proofs 3,170× | proofs 317× |
+
+Crossovers at the measured rate:
+
+| wallet | proofs win beyond | in time |
+|---|---|---|
+| 1 note | 13 blocks | ~16 minutes |
+| 10 notes | 126 blocks | ~2.6 hours |
+| 100 notes | 1,262 blocks | ~26 hours |
+
+**The claim in CLAUDE.md holds, and decisively.** Any wallet offline longer
+than about a day is better off with proofs even holding 100 notes, and a
+year-long gap favours them by two to four orders of magnitude. This is the
+result the project was built to find.
+
+**Framing B — the wallet is doing a full sync.** It also wants notes *received*
+during the gap, which needs trial decryption, which needs the compact block for
+every block in the gap regardless. The nullifiers are already inside that
+download, so proofs do not replace it — they are added to it, and dropping the
+nullifiers from the wire is the only saving available.
+
+| gap | compact sync | nullifiers within it | best case saving |
+|---|---|---|---|
+| 1,000 | 1,573,740 B | 291,008 B | 18.5% |
+| 10,000 | 11,901,048 B | 2,190,336 B | 18.4% |
+| 100,000 | 85,072,000 B | 14,671,712 B | 17.2% |
+| 400,000 | 293,557,504 B | 43,182,624 B | 14.7% |
+
+**At most 14.7% of the bytes over a year-long gap, and 0% of the trial
+decryption**, which §2.2 already identifies as the dominant cost and which no
+accumulator changes. For short gaps with many notes it is a net *loss*: at a
+10-block gap a 100-note wallet adds 134,376 bytes to save 1,824.
+
+So the honest summary is that the accumulator transforms one question and
+barely touches the other. Framing A is a real capability that does not exist
+today. Framing B — "how long does my wallet take to sync" — is essentially
+unaffected, and any presentation of these numbers that quotes the 31,705×
+without saying so is choosing the flattering question.
+
+### The trust caveat, which is not a footnote
+
+A non-membership proof is only meaningful against a **trusted root**, and
+nothing commits accumulator roots to the Zcash chain today. That is the Phase 7
+hard fork. Without it a wallet takes the root from the bridge — and a wallet
+that trusts a bridge for the root could simply ask "is this nullifier spent?"
+and be told, with no accumulator involved at all.
+
+The proof is not worthless in the meantime. Roots are a few hundred bytes, so a
+wallet can fetch them from several independent bridges and compare, reducing
+the trust from "this bridge is honest" to "these bridges are not all colluding",
+and any bridge that serves a proof against a root it also published can be
+caught. But that is materially weaker than trustlessness, and **the framing A
+numbers above measure bandwidth, not trust.** They do not establish that the
+scheme is worth deploying before Phase 7; they establish that if the roots can
+be trusted, the bandwidth argument is overwhelming.
+
+### Sparse paths matter more here than for block download
+
+A depth-40 tree holding 2^25.7 nullifiers is mostly empty, so 631 of the 1,362
+bytes are empty-subtree hashes both sides can derive. Implementing that halves
+every crossover above: a 100-note wallet would break even at roughly 585 blocks
+instead of 1,262. Unlike the Phase 4a case — where the compressible term was
+only 16.4% of the bundle and the Utreexo proofs dominated — here the proof *is*
+the whole cost, so the optimisation is worth its full 53.7%.
