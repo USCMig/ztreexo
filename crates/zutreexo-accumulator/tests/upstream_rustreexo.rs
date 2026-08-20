@@ -1,29 +1,25 @@
-//! Characterization tests for `rustreexo` 0.6.0 defects we depend on.
+//! Upstream `rustreexo` behaviours this project depends on, pinned in both
+//! directions.
 //!
-//! # Why this file exists
+//! # Two kinds of test live here
 //!
-//! CLAUDE.md §3 says to use `rustreexo` for the transparent accumulator rather
-//! than reimplementing it. Phase 1's differential testing found that
-//! `rustreexo` 0.6.0 **generates invalid inclusion proofs after any deletion**:
-//! a leaf whose sibling has been deleted can no longer be proven, by either of
-//! the two full-forest types it offers.
+//! **Regression tests for a fix we carry.** `rustreexo` 0.6.0 as published
+//! generates *invalid inclusion proofs* for any leaf whose sibling has been
+//! deleted, which blocked the transparent half of the design outright
+//! (`docs/design.md` D10). The workspace pins a fork of v0.6.0 carrying the
+//! one-line fix from upstream PR #152. The tests below assert the *fixed*
+//! behaviour, so they fail if the pin is ever lost — reverting to stock 0.6.0
+//! would otherwise reintroduce the defect silently, and the symptom is a bridge
+//! node serving proofs that do not verify.
 //!
-//! That is not an exotic corner. Spending one of two adjacent outputs is
-//! routine, so on mainnet this would fire constantly — it blocks the
-//! transparent half of the design as things stand (see `docs/design.md`,
-//! "Upstream blocker").
-//!
-//! These tests **assert the buggy behaviour on purpose.** They are alarms, not
-//! endorsements: when upstream fixes this, they start failing, which is the
-//! signal to delete this file and re-enable the full property coverage in
-//! `properties.rs`. A test that merely skipped the broken cases would let the
-//! problem rot silently.
+//! **Alarms for defects still present.** These assert the broken behaviour on
+//! purpose and fail when upstream fixes it, which is the signal to simplify
+//! whatever works around them. One remains: `MemForest::clone` aliases
+//! (mit-dci/rustreexo#151).
 //!
 //! Everything here uses stock `rustreexo` types — `BitcoinNodeHash`, not our
-//! [`ZcashNodeHash`](zutreexo_accumulator::ZcashNodeHash) — so there is no
-//! question of our domain separation being the cause.
-//!
-//! Reproduced against `rustreexo = "0.6.0"`.
+//! [`ZcashNodeHash`](zutreexo_accumulator::ZcashNodeHash) — so nothing depends
+//! on our domain separation being right.
 
 #![allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
@@ -64,14 +60,14 @@ fn proofs_are_sound_before_any_deletion() {
     }
 }
 
-/// The defect, minimised: delete one leaf, then try to prove its sibling.
+/// D10, minimised, now asserting the fixed behaviour.
 ///
-/// In canonical Utreexo the surviving sibling is promoted a row when its
-/// partner is deleted, and its proof becomes one node shorter.
-/// `MemForest::prove` appears to keep reporting the leaf's original position,
-/// so verification then asks for a sibling that is no longer part of the path.
+/// Deleting a leaf promotes its surviving sibling one row, and the sibling's
+/// proof becomes one node shorter. Stock 0.6.0 kept reporting the leaf's
+/// original position, so verification asked for a sibling no longer on the
+/// path and returned `InvalidProof(MissingSibling(9))`.
 #[test]
-fn memforest_cannot_prove_the_sibling_of_a_deleted_leaf() {
+fn memforest_proves_the_sibling_of_a_deleted_leaf() {
     let leaves = eight_leaves();
     let mut forest: MemForest<BitcoinNodeHash> = MemForest::new();
     let stump: Stump<BitcoinNodeHash> = Stump::new();
@@ -79,45 +75,57 @@ fn memforest_cannot_prove_the_sibling_of_a_deleted_leaf() {
     forest.modify(&leaves, &[]).unwrap();
     let (stump, _) = stump.modify(&leaves, &[], &Proof::default()).unwrap();
 
-    // Delete leaf 0. Leaf 1 is its sibling.
+    // Delete leaf 0. Leaf 1 is its sibling, and is promoted by the deletion.
     let deletion_proof = forest.prove(&[leaves[0]]).unwrap();
     assert_eq!(stump.verify(&deletion_proof, &[leaves[0]]), Ok(true));
     forest.modify(&[], &[leaves[0]]).unwrap();
     let (stump, _) = stump.modify(&[], &[leaves[0]], &deletion_proof).unwrap();
 
-    // Roots still agree, so the *state* is fine. It is proof generation that
-    // is broken.
     let forest_roots: Vec<_> = forest.get_roots().iter().map(|n| n.get_data()).collect();
     assert_eq!(forest_roots, stump.roots, "forest and stump state diverged");
 
-    // A leaf whose sibling is untouched still proves correctly.
-    let ok = forest.prove(&[leaves[3]]).unwrap();
-    assert_eq!(
-        stump.verify(&ok, &[leaves[3]]),
-        Ok(true),
-        "unaffected leaves should still be provable"
-    );
+    // A leaf whose sibling is untouched. This worked even before the fix, so
+    // it is the control: it distinguishes "the fix works" from "the test
+    // stopped exercising promotion".
+    let unaffected = forest.prove(&[leaves[3]]).unwrap();
+    assert_eq!(stump.verify(&unaffected, &[leaves[3]]), Ok(true));
 
-    // The sibling of the deleted leaf does not.
-    let broken = forest
-        .prove(&[leaves[1]])
-        .expect("prove() returns Ok — it is the resulting proof that is wrong");
-    assert!(
-        stump.verify(&broken, &[leaves[1]]).is_err(),
-        "UPSTREAM FIXED: rustreexo can now prove the sibling of a deleted \
-         leaf. Delete tests/upstream_rustreexo.rs and restore the full \
-         transparent property coverage in tests/properties.rs."
+    // The promoted sibling: the case that was broken.
+    let promoted = forest.prove(&[leaves[1]]).unwrap();
+    assert_eq!(
+        stump.verify(&promoted, &[leaves[1]]),
+        Ok(true),
+        "REGRESSION: the D10 fix is missing — is the rustreexo pin still the \
+         patched fork? See docs/design.md D10 and D25."
     );
 }
 
-/// The same defect through `Pollard`, the other full-forest type, which is
-/// worse: after a deletion it cannot generate a proof for an *unaffected* leaf
-/// either, and reports `"Could not upgrade node, this is probably a bug"`.
+/// The same case through `Pollard`, the other full-forest type — **still
+/// unusable, for a different reason than D10 recorded.**
 ///
-/// Recorded so nobody spends a day concluding that switching structures is the
-/// fix. It is not.
+/// D10 said `Pollard` was worse than `MemForest`: after a deletion it could not
+/// prove an *unaffected* leaf either, failing with "Could not upgrade node,
+/// this is probably a bug". The one-line `calculate_hashes` fix changes the
+/// picture but does not resolve it, and it is worth stating which half moved,
+/// because the obvious reading of "D10 is fixed" is wrong here:
+///
+/// | after deleting leaf 0 | stock 0.6.0 | patched |
+/// |---|---|---|
+/// | promoted sibling (leaf 1) | broken | works |
+/// | unaffected leaves (2..7) | broken | **still broken** |
+///
+/// The promoted sibling was a `calculate_hashes` fault and is gone. The
+/// unaffected-leaf failure is a separate defect in `Pollard`'s node-upgrade
+/// path, it happens at proof *generation*, and nothing in PR #152 touches it.
+///
+/// So CLAUDE.md's bridge node must use `MemForest`, and D10's conclusion —
+/// switching structures is not the fix — survives the fix that prompted
+/// re-checking it. This test is half regression test, half alarm: if the
+/// second assertion starts failing, `Pollard` has become viable and is worth
+/// re-evaluating, since it is the structure designed for exactly the
+/// partial-forest role a bridge serving proofs would want.
 #[test]
-fn pollard_proof_generation_also_breaks_after_a_deletion() {
+fn pollard_still_cannot_prove_unaffected_leaves_after_a_deletion() {
     let leaves = eight_leaves();
     let mut pollard: Pollard<BitcoinNodeHash> = Pollard::new();
     let stump: Stump<BitcoinNodeHash> = Stump::new();
@@ -140,20 +148,23 @@ fn pollard_proof_generation_also_breaks_after_a_deletion() {
     let (stump, _) = stump.modify(&[], &[leaves[0]], &deletion_proof).unwrap();
     assert_eq!(pollard.roots(), stump.roots, "pollard state diverged");
 
-    let sibling_is_broken = match pollard.batch_proof(&[leaves[1]]) {
-        Ok(proof) => stump.verify(&proof, &[leaves[1]]).is_err(),
-        Err(_) => true,
-    };
-    let unaffected_is_broken = match pollard.batch_proof(&[leaves[3]]) {
-        Ok(proof) => stump.verify(&proof, &[leaves[3]]).is_err(),
-        Err(_) => true,
-    };
-
-    assert!(
-        sibling_is_broken && unaffected_is_broken,
-        "UPSTREAM FIXED: Pollard proof generation survives deletions now. \
-         Re-evaluate which structure the bridge node should use."
+    // Regression half: the promoted sibling, which the fix repaired.
+    let promoted = pollard
+        .batch_proof(&[leaves[1]])
+        .expect("REGRESSION: the D10 fix is missing — check the rustreexo pin");
+    assert_eq!(
+        stump.verify(&promoted, &[leaves[1]]),
+        Ok(true),
+        "REGRESSION: the D10 fix is missing — check the rustreexo pin"
     );
+
+    // Alarm half: every leaf the deletion did not touch is still unprovable.
+    for (index, target) in leaves.iter().enumerate().skip(2) {
+        assert!(
+            pollard.batch_proof(&[*target]).is_err(),
+            "UPSTREAM FIXED: Pollard can prove unaffected leaf {index} after a              deletion. Re-evaluate whether the bridge should hold a Pollard              rather than a MemForest — see docs/design.md D10."
+        );
+    }
 }
 
 /// `MemForest::clone()` does not produce an independent snapshot.
@@ -176,6 +187,7 @@ fn pollard_proof_generation_also_breaks_after_a_deletion() {
 ///
 /// If this test starts failing, upstream has made `Clone` deep — at which point
 /// `rollback.rs` can use it and drop the serialization round-trip.
+/// Reported as mit-dci/rustreexo#151.
 #[test]
 fn memforest_clone_aliases_rather_than_snapshots() {
     let leaves = eight_leaves();
@@ -213,14 +225,14 @@ fn memforest_clone_aliases_rather_than_snapshots() {
     );
 }
 
-/// The consequence for us, stated in our own types: a delete-then-prove cycle
-/// cannot currently be sustained across blocks.
+/// The consequence for us, in our own types: **a bridge node can serve proofs
+/// across blocks.**
 ///
-/// This is the shape a bridge node would need in Phase 4 — apply a block's
-/// spends and creations, then serve proofs for the next block's inputs — so it
-/// is the test that says whether the transparent side is viable today.
+/// This is the shape Phase 4 needs — apply a block's spends and creations, then
+/// serve proofs for the next block's inputs — so it is the test that says
+/// whether the transparent side is viable. Under stock 0.6.0 it is not.
 #[test]
-fn our_wrapper_inherits_the_defect() {
+fn our_wrapper_serves_proofs_across_blocks() {
     use zutreexo_accumulator::{UtxoForest, UtxoRoots};
 
     let mut forest = UtxoForest::new();
@@ -242,12 +254,17 @@ fn our_wrapper_inherits_the_defect() {
     forest.delete(&spend).unwrap();
     assert_eq!(forest.roots(), roots.roots());
 
-    // Now spend the sibling in the next block.
+    // Now spend the sibling in the next block — the promoted leaf.
     let next_spend = vec![leaves[1]];
     let next_proof = forest.prove(&next_spend).unwrap();
     assert!(
-        !roots.verify(&next_proof, &next_spend).unwrap_or(false),
-        "UPSTREAM FIXED: a bridge node can now serve proofs across blocks. \
-         See tests/upstream_rustreexo.rs and docs/design.md."
+        roots.verify(&next_proof, &next_spend).unwrap_or(false),
+        "REGRESSION: a bridge node cannot serve proofs across blocks. \
+         Check the rustreexo pin; see docs/design.md D10 and D25."
     );
+
+    // And the spend must actually apply, not merely verify.
+    roots.delete(&next_spend, &next_proof).unwrap();
+    forest.delete(&next_spend).unwrap();
+    assert_eq!(forest.roots(), roots.roots());
 }

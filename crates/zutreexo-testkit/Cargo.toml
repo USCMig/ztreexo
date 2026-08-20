@@ -24,6 +24,7 @@ thiserror.workspace = true
 zebra-chain.workspace = true
 zutreexo-accumulator.workspace = true
 zutreexo-chain.workspace = true
+zutreexo-csn.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

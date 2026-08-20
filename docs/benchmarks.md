@@ -483,3 +483,124 @@ between `create` and `rename` rather than outside the write window.
 The control exists because 25 clean kills look identical whether the writer is
 atomic or the kills never landed on a write — which is exactly what the first
 version of this harness did, and it passed. See `docs/design.md` D23.
+
+---
+
+## Phase 4a — proof bundles: what a compact node downloads, 2026-08-20
+
+Measured by `crates/zutreexo-testkit/src/bin/csn_replay.rs` against a synced
+`zebrad` 6.3.0 at mainnet tip. Every block is applied twice — once by a bridge
+holding full state, once by a compact node holding only roots — and the roots
+are compared after each. A divergence aborts the run, so these describe a
+protocol that verified, not one that merely serialised.
+
+```
+ZUTREEXO_RPC=127.0.0.1:8232 ZUTREEXO_END=150000 \
+  cargo run --release -p zutreexo-testkit --bin csn_replay
+```
+
+### Heights 0–150,000, depth 40
+
+| | |
+|---|---|
+| blocks | 150,001 |
+| elapsed | 628.9 s (239 blk/s at the end) |
+| transparent spends | 16,898,753 |
+| nullifiers | 449,698 |
+| block bytes | 4,250,648,599 |
+| bundle bytes | 7,248,205,320 |
+| **proof overhead** | **170.5%** |
+
+**This is the bad number, and it is worse than it first looked.** A compact node
+downloads 1.7× as much in proofs as it does in blocks. Bitcoin's Utreexo
+simulations saw roughly a quarter more download; this is nearly seven times
+that.
+
+**It also gets worse with height, which is the more important finding:**
+
+| through height | overhead |
+|---|---|
+| 25,000 | 100.9% |
+| 50,000 | 109.0% |
+| 75,000 | 122.5% |
+| 100,000 | 131.5% |
+| 125,000 | 175.3% |
+| 150,000 | 170.5% |
+
+A single number would have hidden this. The trend is what matters, because it
+says the cost is not a fixed tax — it tracks the growth of the transparent UTXO
+set, which Phase 0 measured at 27.5M outputs at tip against the ~1.2M reached by
+height 150,000. Extrapolating from six points across 4% of the chain would be
+irresponsible, so no figure for tip is offered here; what is claimed is the
+direction, and the direction is unfavourable.
+
+### Where the bytes go
+
+| component | bytes | share |
+|---|---|---|
+| **Utreexo inclusion proofs** | **4,733,477,880** | **65.3%** |
+| spent leaf contents | 1,318,208,796 | 18.2% |
+| nullifier insertion proofs | 1,192,149,398 | 16.4% |
+
+**Two predictions were wrong here, and the correction is the useful part.**
+`bundle.rs`'s first draft called the spent leaf contents "the single largest
+term". They are the smallest. And an earlier run over heights 0–20,000 put
+nullifier proofs at 40.5% and Utreexo proofs at 32.0% — the opposite ordering —
+which was an artefact of the early chain having few transparent spends. Over
+150,000 blocks there are 16.9M transparent spends against 450k nullifiers, and
+the transparent side dominates by a factor of four.
+
+The lesson is about the measurement, not the design: a 20,000-block range looked
+like plenty and gave a confidently wrong answer about which half of the system
+to optimise.
+
+### Batching, over 12,471 blocks with two or more inputs (heights 0–20,000)
+
+| | bytes |
+|---|---|
+| one proof per input | 1,005,753,525 |
+| one batched proof | 146,646,288 |
+| **saving** | **85.4%** |
+
+CLAUDE.md Phase 4 asks for proof aggregation and predicts that inputs in the
+same block share internal nodes. They do, and it is worth far more than
+expected. `rustreexo`'s `Proof` is natively multi-target, so this is a property
+of the type rather than an optimisation layered on top — the work was measuring
+it, not building it. Given that the Utreexo term is now known to dominate, this
+85.4% is the difference between an unattractive design and an unusable one.
+
+**This measurement was wrong once and said so.** The first version proved each
+input individually *after* applying the block, by which time the leaves are
+deleted and every `prove` fails. It skipped all 12,471 blocks and printed "no
+block in this range had two or more provable inputs" over a range holding 1.6
+million spends. It reported that rather than a plausible number, which is the
+only reason it was caught. Enabling it costs roughly double the runtime, so it
+is behind `ZUTREEXO_MEASURE_BATCHING=1` and the 150,000-block run above does not
+include it.
+
+### An optimisation available but not taken
+
+Over heights 0–20,000, **71.4% of the sibling hashes in nullifier proofs**
+(4,027,481 of 5,641,440) are the canonical empty-subtree hash for their level. A
+depth-40 tree holding 70,518 nullifiers is overwhelmingly empty, so above
+roughly `log2(leaf_count)` every sibling on a path is a value both sides derive
+from the pool's domain separator and the level. That is 128,879,392 of the
+186,943,218 bytes spent on nullifier proofs in that range.
+
+A bitmap of which siblings are non-empty would remove most of it. But the
+nullifier term is only 16.4% of the bundle over the longer range, so this is
+worth roughly 11% of the total — useful, not decisive. **The 65.3% sitting in
+Utreexo proofs is where the work belongs**, and that is a question about
+`rustreexo`'s proof encoding rather than ours.
+
+Both are wire-format changes and belong with the Phase 4b transport, before the
+format has clients. Neither has been implemented or measured at the new size;
+the percentages above are projections from a byte census.
+
+### What this does not measure
+
+The headline Phase 5 result is **nullifier-check cost against gap length** for a
+*wallet* — one `O(log n)` non-membership proof per note against scanning every
+block since last sync. That is a different query by a different actor, and
+nothing here bears on it. These numbers are the cost of a compact node doing
+initial block download, which is the axis where an accumulator is most exposed.

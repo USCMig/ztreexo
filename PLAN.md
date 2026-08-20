@@ -36,7 +36,8 @@ infrastructure, `fix/<topic>` for defects.
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
 | 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, peak 32.7 GiB |
 | 3 | Persistence, snapshots, crash consistency | `phase-3-persistence` | **complete** — DoD met: 25 SIGKILLs mid-save, store intact every time, with a non-atomic control proving the harness detects corruption. Merged `main` 2026-08-20; the merge's coverage run found three snapshot tests passing for the wrong reason ([D24](docs/design.md)) |
-| 4 | Bridge node (proof serving) | — | not started |
+| 4a | Proof bundle + compact state node verification core | `phase-4a-bundle` | **complete** — a roots-only node tracks the bridge byte-for-byte over real mainnet blocks; bandwidth measured and it is unflattering ([`docs/benchmarks.md`](docs/benchmarks.md)) |
+| 4b | Bridge service transport (gRPC/JSON-RPC), Zaino integration | — | not started |
 | 5 | Compact state node, published benchmarks | — | not started |
 | 6 | Fuzzing, DoS analysis, privacy review | — | not started |
 | 7 | ZIP draft — gated on 5 and 6 | — | not started |
@@ -44,6 +45,28 @@ infrastructure, `fix/<topic>` for defects.
 ## Known gaps, carried deliberately
 
 These are open and tracked here rather than discovered later.
+
+**The compact-node bandwidth overhead is 170% and rising with height.** A
+compact node downloads 1.7x as much in proofs as in blocks over heights
+0–150,000, against roughly 25% for Bitcoin's Utreexo simulations — and the
+figure climbs from 100.9% at height 25,000 to 170.5% at 150,000 as the
+transparent UTXO set grows. **65.3% of that is Utreexo inclusion proofs**, so
+that is where any optimisation belongs; the derivable empty-subtree hashes in
+nullifier proofs are worth only about 11% of the bundle. Both are wire-format
+changes and belong with the Phase 4b transport, before the format has clients.
+See [`docs/benchmarks.md`](docs/benchmarks.md).
+
+This is the measurement CLAUDE.md Phase 5 anticipated might sink the design, and
+it arrived early and negative. It is not yet a verdict: the 85.4% saving from
+batching is already counted in the 170%, the sparse-path encodings are not, and
+the wallet-side nullifier query — the actual headline claim — is untouched by
+any of it.
+
+**`rustreexo` is pinned to a fork.** The D10 fix (upstream PR #152) is not
+merged. `tests/upstream_rustreexo.rs` asserts the fixed behaviour, so losing the
+pin fails loudly rather than silently reintroducing invalid proofs. Drop the
+pin when upstream merges. mit-dci/rustreexo#151 is still open and still worked
+around.
 
 **Every check inside `decode` is reachable only through a forged file.** `load`
 verifies magic and checksum before calling `decode`, so the checksum masks every

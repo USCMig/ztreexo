@@ -65,3 +65,16 @@ deny = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# One git dependency, and it is a fork of v0.6.0 carrying a single upstream
+# one-line fix: mit-dci/rustreexo#152, which repairs the D10 blocker that made
+# `MemForest` generate invalid inclusion proofs after any deletion. Without it
+# the transparent half of the design does not work at all — see
+# `docs/design.md` D10 and D25.
+#
+# A fork rather than the PR author's branch, so the code being built is under an
+# account this project controls. **Remove this entry and return to the published
+# crate when upstream merges**; `tests/upstream_rustreexo.rs` asserts the fixed
+# behaviour, so losing the pin fails loudly rather than silently reintroducing
+# invalid proofs.
+allow-git = ["https://github.com/USCMig/rustreexo"]
