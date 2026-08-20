@@ -143,18 +143,48 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "regions": 95.4,
         "lines": 97.3,
     },
+    # Stage 2d's zebrad RPC client (BlockStream/RpcSource/FixtureSource).
+    # Exercised against a real TCP server in the test module — a background
+    # thread standing in for zebrad — rather than against the network, so this
+    # runs the same in CI as anywhere else.
+    "crates/zutreexo-testkit/src/source.rs": {
+        "regions": 93.7,
+        "lines": 96.7,
+        "min_branches": 10,  # measured 12/16
+    },
+    # Stage 2d's genesis-to-tip replay binary. This is an operational entry
+    # point, not library code: `main` parses env vars, opens a TCP connection
+    # to a live, synced `zebrad`, and drives a run that takes on the order of
+    # a day. No test environment has that node, so this can never be
+    # exercised the way a fixture-gated file eventually is — it is not a
+    # "missing fixture", it is structurally out of reach for the automated
+    # suite. `never_measured` records that explicitly instead of letting the
+    # workspace average absorb it silently. The logic worth covering (RPC
+    # framing, response parsing, block ordering) lives in source.rs instead,
+    # which this binary only calls.
+    "crates/zutreexo-testkit/src/bin/genesis_replay.rs": {
+        "never_measured": (
+            "operational entry point — needs a live synced zebrad, which no "
+            "test environment has. See src/source.rs for the logic this "
+            "binary drives, covered there instead."
+        ),
+    },
 }
 
-# Measured 93.48 / 92.22 / 80.37 in the CI profile at stage 2c, after
-# `cargo llvm-cov clean`. Every per-file figure rose from 2b; the workspace
-# total rose with them.
+# Measured 90.12 / 89.34 / 76.42 in the CI profile at stage 2d, after
+# `cargo llvm-cov clean`, with source.rs's new tests included. Lower than
+# stage 2c's 93.48 / 92.22 / 80.37 despite those tests, because genesis_replay.rs
+# joined the workspace total at a permanent, structural 0% (see its
+# `never_measured` entry above) — 272 regions / 161 lines / 20 branches that
+# cannot be raised by writing more tests. Confirmed stable across two
+# back-to-back clean measurements before being used as the new floor.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 93.1,
-    "lines": 91.9,
+    "regions": 90.1,
+    "lines": 89.3,
     # Percentage, not a count: the workspace denominator grows as code is added,
     # so an absolute floor here would have to be edited on every commit. Carries
     # extra tolerance for the branch jitter described below.
-    "branches": 78.5,
+    "branches": 76.4,
 }
 
 # ---------------------------------------------------------------------------
@@ -255,6 +285,16 @@ def main(argv: list[str]) -> int:
             if not filename.endswith(suffix):
                 continue
             matched.add(suffix)
+
+            # Structurally unmeasurable (e.g. needs a live node no test
+            # environment has) is a different claim from "never ran in this
+            # particular run" — it never gets a fixture to be gated on, so it
+            # is reported and skipped rather than routed through the
+            # unexercised()/floor checks below, neither of which apply.
+            reason = floors.get("never_measured")
+            if reason is not None:
+                print(f"  {suffix}: NOT MEASURED BY DESIGN — {reason}")
+                continue
 
             # Diagnose "never ran" before comparing against floors, so the
             # message names the cause instead of three derived symptoms.

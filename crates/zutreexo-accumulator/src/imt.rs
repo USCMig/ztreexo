@@ -800,7 +800,7 @@ impl IndexedMerkleTree {
                 .map_err(|_| ImtError::CorruptTree("leaf index exceeds u64"))?;
             sorted.push((leaf.value, index));
         }
-        sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        sorted.sort_unstable_by_key(|a| a.0);
 
         // Rebuild each leaf from its successor in sorted order, rather than
         // trusting the links the incremental path wrote.
