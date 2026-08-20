@@ -28,12 +28,14 @@
 //! nodes rather than inside transactions (CLAUDE.md §1, §5 rule 1).
 
 pub mod block_apply;
+pub mod bundle;
 pub mod extract;
 pub mod pool;
 pub mod rollback;
 pub mod store;
 
 pub use block_apply::{apply_block, ApplyError, ApplyOptions, ApplyOutcome, StateDelta};
+pub use bundle::{apply_and_prove, BlockProofBundle, BundleError};
 pub use extract::{summarize_block, BlockSummary, ExtractError, OutPoint};
 pub use pool::{ChainAccumulators, StateCounts};
 

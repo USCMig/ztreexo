@@ -380,16 +380,16 @@ proptest! {
         prop_assert!(forest.prove(&target).is_err() || !forest.verify(&proof, &target).unwrap_or(false));
     }
 
-    /// Forest and roots-only view agree on *state* across repeated
-    /// delete-and-add rounds, even though proof generation does not survive
-    /// them.
+    /// Forest and roots-only view agree across repeated delete-and-add rounds,
+    /// and **every proof the forest issues verifies against the roots-only
+    /// view** — including proofs for leaves that earlier deletions promoted.
     ///
-    /// The stronger property — that a proof issued after a deletion still
-    /// verifies — is currently false, and not because of anything in this
-    /// crate: `rustreexo` 0.6.0 generates invalid proofs for any leaf whose
-    /// sibling has been deleted. `tests/upstream_rustreexo.rs` pins that
-    /// defect and will fail loudly when it is fixed; at that point the
-    /// `verify` assertion below should be restored and this comment deleted.
+    /// That second half is the property a bridge node lives on: it applies a
+    /// block, then serves proofs for the next block's inputs against leaves
+    /// whose neighbours have just been spent. It was false under stock
+    /// `rustreexo` 0.6.0 (`docs/design.md` D10) and this test was narrowed to
+    /// skip the rounds it could not satisfy. The pinned fork restores it, so
+    /// the skip is gone; `tests/upstream_rustreexo.rs` guards the pin.
     #[test]
     fn utxo_forest_and_roots_stay_in_step(
         created in prop_vec(1usize..6, 1..8),
@@ -413,12 +413,14 @@ proptest! {
 
             let proof = forest.prove(&deletions).unwrap();
 
-            // `Stump::modify` re-verifies internally, so a proof rejected here
-            // makes the round un-appliable; skip those rather than assert a
-            // guarantee upstream does not currently provide.
-            if !roots.verify(&proof, &deletions).unwrap_or(false) {
-                break;
-            }
+            // No longer a skip: a proof the forest issued must verify against a
+            // view holding nothing but roots. Rounds after the first are the
+            // ones that matter, since those are the deletions acting on a
+            // forest that earlier deletions already reshaped.
+            prop_assert!(
+                roots.verify(&proof, &deletions).unwrap_or(false),
+                "a forest-issued proof failed against the roots-only view"
+            );
 
             roots.apply(&additions, &deletions, &proof).unwrap();
             forest.apply(&additions, &deletions).unwrap();

@@ -187,34 +187,62 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "binary drives, covered there instead."
         ),
     },
+    # Phase 4a's two measurement binaries. Same category as genesis_replay: they
+    # drive a live node for hours and produce numbers for docs/benchmarks.md,
+    # and the logic worth covering lives in the libraries they call
+    # (bundle.rs, zutreexo-csn) which are gated above.
+    "crates/zutreexo-testkit/src/bin/csn_replay.rs": {
+        "never_measured": (
+            "operational entry point — replays mainnet from a live zebrad in "
+            "bridge/compact-node lockstep. The transition it drives is covered "
+            "by zutreexo-csn/tests/lockstep.rs."
+        ),
+    },
+    "crates/zutreexo-testkit/src/bin/gap_cost.rs": {
+        "never_measured": (
+            "operational entry point — samples a live zebrad to measure wallet "
+            "sync cost against gap length. Reporting only; it computes no state."
+        ),
+    },
+    # Phase 4a. The bundle format is what a bridge serves and a compact node
+    # consumes, so its decoder is an untrusted-input surface like store.rs.
+    "crates/zutreexo-chain/src/bundle.rs": {
+        "regions": 87.1,
+        "lines": 81.0,
+        "min_branches": 7,  # measured 9/14
+    },
+    # The compact state node itself: the one component that decides whether a
+    # roots-only node accepts a block. Every rejection path here is a defence
+    # against a hostile bridge.
+    "crates/zutreexo-csn/src/lib.rs": {
+        "regions": 86.3,
+        "lines": 77.4,
+        "min_branches": 20,  # measured 22/28
+    },
 }
 
-# Measured 89.66 / 88.88 / 76.81 in the CI profile at Phase 3, after
-# `cargo llvm-cov clean`. Confirmed stable across two back-to-back clean
-# measurements — identical to four decimal places — before being used as the
-# new floor.
+# Measured 93.29 / 92.17 / 81.38 in the CI profile at Phase 4a, after
+# `cargo llvm-cov clean`, over the workspace **excluding never-measured files**
+# (see the calculation in `main`).
 #
-# Regions and lines fall slightly against stage 2d's 90.12 / 89.34 despite
-# store.rs being well covered in its own right, because store.rs is 506 regions
-# at 89.13% and the average it joined was 90.12%. Adding a well-tested file can
-# still lower a mean; that is arithmetic, not a regression, and the per-file
-# floor above is what actually guards the new code.
+# Higher than Phase 3's 89.66 / 88.88 / 76.81 despite Phase 4a adding two more
+# operational binaries, and the rise is the point: those binaries used to be
+# inside the average. Three of them now account for 957 regions of permanent
+# 0%, which was dragging the figure to 83.4% and would have forced a third
+# consecutive lowering of a gate that is supposed to ratchet upward. Taking
+# them out leaves a floor over code that tests can actually reach, and Phase
+# 4a's library additions — bundle.rs and zutreexo-csn — are covered well enough
+# to raise it.
 #
-# Branches went the other way, 76.42 -> 76.81, from the forged-snapshot tests
-# described in the store.rs entry.
-#
-# The 2d note about genesis_replay.rs still applies: it sits at a permanent,
-# structural 0% in the total (272 regions / 161 lines / 20 branches) that no
-# amount of testing can raise.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 89.6,
-    "lines": 88.8,
+    "regions": 93.2,
+    "lines": 92.1,
     # Percentage, not a count: the workspace denominator grows as code is added,
     # so an absolute floor here would have to be edited on every commit. Set
     # 0.3 below the measurement rather than at the usual one-decimal truncation,
     # because this is the one workspace metric the jitter described below can
     # move, and a flaky gate gets switched off.
-    "branches": 76.5,
+    "branches": 81.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -395,13 +423,50 @@ def main(argv: list[str]) -> int:
             failures.append(f"{suffix}: no coverage data — was the file moved?")
 
     # ---- workspace floor ----
-    totals = data.get("totals", {})
-    print("  workspace total:", end=" ")
+    #
+    # Computed here rather than read from llvm-cov's own `totals`, because the
+    # `never_measured` files have to come out of it.
+    #
+    # They are structurally unmeasurable — operational binaries that need a live
+    # synced node — so every region in them is a permanent zero that no test can
+    # ever raise. Leaving them in does not make the gate stricter, it makes it
+    # meaningless: each new binary drags the average down, the floor gets
+    # lowered to match, and the lowered floor no longer constrains the code that
+    # *is* testable. That already happened once, and by Phase 4a three such
+    # binaries contributed 957 regions of guaranteed 0%, pulling the workspace
+    # from 93.3% to 83.4%.
+    #
+    # Excluding them means the floor tracks what tests can actually influence.
+    # The raw figure is still printed, so nothing is hidden.
+    never = {
+        suffix
+        for suffix, floors in FILE_FLOORS.items()
+        if floors.get("never_measured") is not None
+    }
+    accumulated: dict[str, list[int]] = {
+        metric: [0, 0] for metric in ("regions", "lines", "functions", "branches")
+    }
+    excluded = 0
+    for entry in data.get("files", []):
+        filename = entry.get("filename", "")
+        if any(filename.endswith(suffix) for suffix in never):
+            excluded += 1
+            continue
+        summary = entry.get("summary", {})
+        for metric, pair in accumulated.items():
+            block = summary.get(metric)
+            if not isinstance(block, dict):
+                continue
+            pair[0] += block.get("covered") or 0
+            pair[1] += block.get("count") or 0
+
+    print(f"  workspace total ({excluded} never-measured files excluded):", end=" ")
     parts = []
     for metric in ("regions", "lines", "functions", "branches"):
-        actual = percent(totals, metric)
-        if actual is None:
+        covered, total = accumulated[metric]
+        if not total:
             continue
+        actual = 100.0 * covered / total
         parts.append(f"{metric} {actual:.2f}%")
         floor = WORKSPACE_FLOORS.get(metric)
         if floor is not None and actual + 1e-9 < floor:
@@ -409,6 +474,14 @@ def main(argv: list[str]) -> int:
                 f"workspace: {metric} {actual:.2f}% below floor {floor:.2f}%"
             )
     print(", ".join(parts))
+
+    raw = data.get("totals", {})
+    raw_parts = [
+        f"{metric} {value:.2f}%"
+        for metric in ("regions", "lines", "functions", "branches")
+        if (value := percent(raw, metric)) is not None
+    ]
+    print("  (including them: " + ", ".join(raw_parts) + ")")
 
     if failures:
         print("\ncoverage floors not met:", file=sys.stderr)

@@ -545,6 +545,112 @@ sweep.
 
 ---
 
+## D25 — The `rustreexo` D10 blocker is fixed, and the fix is pinned to a fork
+
+**Phase 4a.** Resolves the blocker recorded in D10, which had stood since
+Phase 1 and blocked the transparent half of the entire design.
+
+Upstream PR mit-dci/rustreexo#152 proposes a one-line change to
+`Proof::calculate_hashes`. `proof_positions` is derived from `translated` —
+targets mapped from `MAX_FOREST_ROWS` space into the forest's own rows — but the
+node list those proof hashes are paired with is built from the *untranslated*
+`self.targets`. `translate` is the identity at row 0, so the two spaces agree
+for as long as every target is a leaf at the bottom of the forest, and the
+mismatch is invisible. A deletion promotes a leaf, the spaces diverge, and
+`get_next` hands `calculate_hashes` the wrong sibling.
+
+**It was verified rather than trusted.** Applied to v0.6.0 (`8bb8b26`) — not
+`main`, which carries a breaking `Stump::modify` change — and run against a
+harness that builds 400 randomised forests, deletes a random subset from each,
+then proves and verifies *every* surviving leaf:
+
+| | proofs checked | failures | root mismatches |
+|---|---|---|---|
+| stock v0.6.0 | 4,671 | **1,848** | 0 |
+| patched | 4,671 | **0** | 0 |
+
+Same seeds, same leaves. 40% of survivors were unprovable before and all are
+provable after.
+
+**`Pollard` is a different story, and D10's conclusion survives.** The obvious
+reading — "D10 is fixed, so both full-forest types work now" — is wrong:
+
+| after deleting leaf 0 | stock 0.6.0 | patched |
+|---|---|---|
+| promoted sibling | broken | works |
+| unaffected leaves | broken | **still broken** |
+
+The promoted sibling was the `calculate_hashes` fault. The unaffected-leaf
+failure is a separate defect in `Pollard`'s node-upgrade path, occurs at proof
+*generation*, and nothing in PR #152 touches it. So the bridge must hold a
+`MemForest`, and D10's "switching structures is not the fix" holds — which is
+worth stating because the first pass at this concluded the opposite from an
+alarm that happened to fire. The alarm asserted `sibling_is_broken &&
+unaffected_is_broken`, so it fired when only one of the two improved.
+
+**Consequences.**
+
+* `Cargo.toml` pins `rustreexo` to a fork of v0.6.0 carrying the one line.
+  Reverting to stock silently reintroduces invalid proofs, so
+  `tests/upstream_rustreexo.rs` now asserts the *fixed* behaviour: those tests
+  are the guard on the pin. Drop the pin when upstream merges.
+* The transparent property coverage narrowed in Phase 1 is restored.
+  `utxo_forest_and_roots_stay_in_step` no longer skips rounds whose proofs will
+  not verify; it asserts they do. Confirmed to fail against stock 0.6.0 and pass
+  against the fork, because a restored assertion that cannot fire is worth
+  nothing (D24).
+* mit-dci/rustreexo#151 (`MemForest::clone` aliases rather than snapshots) is
+  untouched and remains an alarm. `rollback.rs` still needs the
+  serialize/deserialize round-trip.
+
+---
+
+## D26 — What goes in a proof bundle, and what the block already says
+
+**Phase 4a.** The bundle is the interface between a bridge and a compact node,
+and every byte in it is paid on every block by every client, so the question is
+not "what might a verifier want" but "what can a verifier not derive".
+
+**In:** the spent outputs' full contents, one batched Utreexo inclusion proof,
+and one insertion proof per nullifier.
+
+**Out, and why:**
+
+* **Created outputs.** They are in the block. A verifier with the block computes
+  their leaf hashes itself. Shipping them would double the second-largest term.
+* **Nullifier values.** Likewise in the block.
+* **Non-membership proofs.** An `InsertionProof` carries the low leaf and its
+  path, and `verify_insertion` checks both that the low leaf is in the tree at
+  the current root and that it brackets the value — which *is* a non-membership
+  proof. A separate one would add bytes and a second thing to keep consistent
+  for no additional assurance. `NullifierProofBundle` does carry both, and that
+  is not a contradiction: it answers a wallet's standalone "has this nullifier
+  been spent?" query, where there is no insertion to piggyback on.
+
+**The spent contents are unavoidable.** A transaction that spends an output
+carries only an outpoint, while the leaf being deleted commits to value, script,
+height and coinbase flag (D9). Nothing in the block supplies that, so either the
+bundle carries it or the verifier keeps a UTXO set — and keeping one is the
+thing the project exists to avoid.
+
+**Cancellation is claimed by the bridge and checked by the node.** An output
+created and spent in the same block never enters the accumulator (D21), so it
+has no proof. Rather than have the compact node re-derive which spends were
+cancelled — it cannot, exactly: `apply_block` consults the outpoint index first
+and the compact node has no index — the bundle simply omits them, and the node
+verifies that every omitted spend is an output the block does create. The
+bridge asserts, the node checks against the block. A bridge that omitted a
+*real* spend would otherwise get a deletion skipped, and the divergence would
+surface blocks later with nothing pointing at the cause.
+
+Three tampering cases are tested and rejected: a substituted leaf (a different
+output that is genuinely in the accumulator), an omitted spend, and a smuggled
+extra leaf. A hostile bridge can withhold service and can observe which blocks a
+node asks for — the Phase 6 privacy question — but it cannot make a compact node
+accept a wrong transition.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage

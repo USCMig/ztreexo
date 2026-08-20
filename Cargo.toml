@@ -25,6 +25,7 @@ publish = false
 # `workspace.package.version` above.
 zutreexo-accumulator = { path = "crates/zutreexo-accumulator", version = "0.0.0" }
 zutreexo-chain = { path = "crates/zutreexo-chain", version = "0.0.0" }
+zutreexo-csn = { path = "crates/zutreexo-csn", version = "0.0.0" }
 zutreexo-testkit = { path = "crates/zutreexo-testkit", version = "0.0.0" }
 
 blake2b_simd = "1.0"
@@ -72,3 +73,19 @@ overflow-checks = true
 [profile.bench]
 debug = true
 overflow-checks = true
+
+# `rustreexo` 0.6.0 as published generates *invalid inclusion proofs* for any
+# leaf whose sibling has been deleted, which breaks the transparent half of this
+# project outright — a bridge node cannot serve proofs across blocks
+# (`docs/design.md` D10). This pins a fork of v0.6.0 carrying the one-line fix
+# from upstream PR mit-dci/rustreexo#152, verified here against a control:
+# 1,848 of 4,671 proofs fail on stock, 0 on the fork (D25).
+#
+# A `[patch]` rather than a git dependency on the crate itself, so the version
+# requirement above stays visible and **removing these three lines restores the
+# published crate** the moment upstream merges. When that happens, delete this
+# block, drop the `allow-git` entry in `deny.toml`, and expect
+# `tests/upstream_rustreexo.rs` to keep passing — it asserts the fixed
+# behaviour, so it is the guard on this pin.
+[patch.crates-io]
+rustreexo = { git = "https://github.com/USCMig/rustreexo", rev = "dc368ccc6988f85c0754ef0b1dff9258f2789123" }

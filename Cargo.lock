@@ -2212,8 +2212,7 @@ dependencies = [
 [[package]]
 name = "rustreexo"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfd192515a261e313333836d17857e2ae6cdf97d3c57f43f45804b6f657b07f0"
+source = "git+https://github.com/USCMig/rustreexo?rev=dc368ccc6988f85c0754ef0b1dff9258f2789123#dc368ccc6988f85c0754ef0b1dff9258f2789123"
 dependencies = [
  "bitcoin-io",
  "bitcoin_hashes",
@@ -3380,6 +3379,9 @@ dependencies = [
 name = "zutreexo-csn"
 version = "0.0.0"
 dependencies = [
+ "hex",
+ "thiserror 2.0.20",
+ "zebra-chain",
  "zutreexo-accumulator",
  "zutreexo-chain",
 ]
@@ -3396,4 +3398,5 @@ dependencies = [
  "zebra-chain",
  "zutreexo-accumulator",
  "zutreexo-chain",
+ "zutreexo-csn",
 ]

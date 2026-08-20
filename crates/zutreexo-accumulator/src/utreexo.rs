@@ -251,7 +251,7 @@ impl UtxoLeaf {
 /// Wraps `rustreexo`'s proof so the rest of the codebase never names it
 /// directly. Proofs for inputs in the same block share internal nodes, which is
 /// what makes batching worth doing — the deduplication measurement is Phase 4.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct UtxoProof(Proof<ZcashNodeHash>);
 
 impl Default for UtxoProof {
@@ -342,9 +342,16 @@ impl UtxoRoots {
     /// Applies a block's worth of additions and deletions in one step.
     ///
     /// Deletions are processed before additions, matching the block
-    /// application order in CLAUDE.md Phase 2 — inputs are verified and removed
-    /// before outputs are inserted, so a block cannot spend an output it
-    /// creates.
+    /// application order in CLAUDE.md Phase 2: inputs are verified and removed
+    /// before outputs are inserted.
+    ///
+    /// That ordering is **not** because a block cannot spend an output it
+    /// creates — it can, and mainnet block 572 does. Such an output is
+    /// cancelled by the caller and never reaches this function at all
+    /// (`docs/design.md` D21), so by the time a batch arrives here, no
+    /// deletion in it refers to an addition in it. An earlier version of this
+    /// comment asserted the false rule; it survived three stages because the
+    /// behaviour it justified happens to be correct for a different reason.
     pub fn apply(
         &mut self,
         additions: &[Hash],

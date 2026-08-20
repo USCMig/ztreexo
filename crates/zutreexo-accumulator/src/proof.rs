@@ -77,6 +77,31 @@ pub enum ProofCodecError {
     /// The `rustreexo` proof decoder rejected the input.
     #[error("utreexo proof decode failed: {0}")]
     Utreexo(String),
+
+    /// A length prefix claims more bytes than the input still holds.
+    ///
+    /// Distinct from [`ProofCodecError::UnexpectedEof`], which is raised *after*
+    /// a read runs out. This one is raised *before* allocating, so a hostile
+    /// length is rejected without the allocation it was asking for
+    /// (`docs/design.md` D13 records exactly this defect in upstream
+    /// `rustreexo`'s decoder). A bridge node's clients are untrusted by
+    /// definition, so the check has to precede the `with_capacity`.
+    #[error("{field} declares {declared} bytes but only {remaining} remain")]
+    DeclaredLengthExceedsInput {
+        /// Which field carried the length.
+        field: &'static str,
+        /// The declared length.
+        declared: usize,
+        /// Bytes actually left.
+        remaining: usize,
+    },
+
+    /// A field decoded but holds a value the format does not allow.
+    #[error("malformed encoding: {reason}")]
+    Malformed {
+        /// What was wrong.
+        reason: &'static str,
+    },
 }
 
 /// A bounds-checked cursor over a byte slice.
