@@ -158,6 +158,32 @@ impl ChainAccumulators {
         self.utxo_index = index;
     }
 
+    /// Iterates the outpoint index in key order, for snapshotting.
+    ///
+    /// Ordered because a snapshot must be byte-reproducible: two saves of the
+    /// same state have to produce the same file, or nothing downstream can
+    /// checksum or diff them. `BTreeMap` gives that for free, which is part of
+    /// why it is a `BTreeMap` (CLAUDE.md §5 rule 5).
+    pub(crate) fn utxo_index_iter(&self) -> impl Iterator<Item = (&OutPoint, &UtxoLeaf)> {
+        self.utxo_index.iter()
+    }
+
+    /// Installs a rebuilt nullifier tree, as loading a snapshot does.
+    pub(crate) fn replace_tree(&mut self, pool: PoolId, tree: IndexedMerkleTree) {
+        self.nullifiers.insert(pool, tree);
+    }
+
+    /// The outpoint index as owned pairs, for tests that need to compare it.
+    ///
+    /// Public so an integration test can assert every leaf field survived a
+    /// snapshot; the private iterator above serves the encoder.
+    pub fn utxo_index_for_test(&self) -> Vec<(OutPoint, UtxoLeaf)> {
+        self.utxo_index
+            .iter()
+            .map(|(outpoint, leaf)| (*outpoint, leaf.clone()))
+            .collect()
+    }
+
     /// Rewinds the recorded tip. Rollback owns this; nothing else should.
     pub(crate) fn set_tip_to(&mut self, height: Option<u32>) {
         self.tip = height;

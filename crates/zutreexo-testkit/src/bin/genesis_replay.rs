@@ -44,7 +44,7 @@ use std::time::Instant;
 
 use zutreexo_accumulator::imt::DEFAULT_DEPTH;
 use zutreexo_accumulator::PoolId;
-use zutreexo_chain::{apply_block, summarize_block, ApplyOptions, ChainAccumulators};
+use zutreexo_chain::{apply_block, load, save, summarize_block, ApplyOptions, ChainAccumulators};
 use zutreexo_testkit::source::{BlockSource, BlockStream, RpcSource};
 
 fn env_u32(key: &str, fallback: u32) -> u32 {
@@ -121,6 +121,44 @@ enum RebuildOutcome {
 }
 
 fn main() -> std::process::ExitCode {
+    // Load-and-report mode. This is the measurement Phase 3 exists to produce:
+    // the cost of arriving at a populated accumulator without replaying.
+    if let Ok(path) = std::env::var("ZUTREEXO_LOAD") {
+        let path = std::path::PathBuf::from(path);
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let began = Instant::now();
+        return match load(&path) {
+            Ok(state) => {
+                let elapsed = began.elapsed().as_secs_f64();
+                let counts = state.counts();
+                println!(
+                    "loaded {:.2} GB in {:.1}s — tip {:?}, {} unspent outputs, rss {} MiB",
+                    size as f64 / 1e9,
+                    elapsed,
+                    state.tip(),
+                    counts.utxos,
+                    rss_mib()
+                );
+                for pool in PoolId::ALL {
+                    println!(
+                        "  {pool:<10} {} nullifiers  root {}",
+                        counts.nullifiers.get(&pool).copied().unwrap_or(0),
+                        state
+                            .nullifier_roots()
+                            .get(&pool)
+                            .map(hex::encode)
+                            .unwrap_or_default()
+                    );
+                }
+                std::process::ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("load failed: {error}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+
     let address = std::env::var("ZUTREEXO_RPC").unwrap_or_else(|_| "127.0.0.1:8232".to_owned());
     let source = RpcSource::new(&address);
 
@@ -257,6 +295,25 @@ fn main() -> std::process::ExitCode {
                 f64::from(report_every) / recent,
                 rebuild_note,
             );
+        }
+    }
+
+    // Persist the finished state, if asked. This is what turns the seven-hour
+    // replay above into a one-off cost: `ZUTREEXO_SAVE=<path>`.
+    if let Ok(path) = std::env::var("ZUTREEXO_SAVE") {
+        let path = std::path::PathBuf::from(path);
+        let began = Instant::now();
+        match save(&state, &path) {
+            Ok(()) => {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                println!(
+                    "\nsnapshot written to {} — {:.2} GB in {:.1}s",
+                    path.display(),
+                    size as f64 / 1e9,
+                    began.elapsed().as_secs_f64()
+                );
+            }
+            Err(error) => eprintln!("\nsnapshot failed: {error}"),
         }
     }
 

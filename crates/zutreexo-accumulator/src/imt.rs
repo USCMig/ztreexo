@@ -800,7 +800,7 @@ impl IndexedMerkleTree {
                 .map_err(|_| ImtError::CorruptTree("leaf index exceeds u64"))?;
             sorted.push((leaf.value, index));
         }
-        sorted.sort_unstable_by_key(|a| a.0);
+        sorted.sort_unstable_by_key(|(value, _)| *value);
 
         // Rebuild each leaf from its successor in sorted order, rather than
         // trusting the links the incremental path wrote.
@@ -852,6 +852,121 @@ impl IndexedMerkleTree {
             .first()
             .copied()
             .ok_or(ImtError::CorruptTree("fold produced no root"))
+    }
+
+    /// Builds a tree from values in insertion order, folding bottom-up.
+    ///
+    /// # Why this exists alongside `from_values`
+    ///
+    /// [`IndexedMerkleTree::from_values`] replays every insertion, costing
+    /// `2 * depth` hashes per value — 80 at depth 40. Reloading a saved tip
+    /// snapshot that way would take longer than fetching the chain again.
+    /// Folding a level at a time costs roughly three hashes per value.
+    ///
+    /// The result is **identical**, not merely equivalent: same leaves, same
+    /// value index, same internal node map. Persistence depends on that, since
+    /// a reloaded tree has to be indistinguishable from a replayed one — undo
+    /// and rollback compare exact state, not just roots. `bulk_matches_
+    /// sequential` asserts it.
+    ///
+    /// This is what lets a snapshot store *only the values*: everything else
+    /// here is derived, so there is no redundant state on disk that could
+    /// disagree with itself.
+    pub fn from_values_bulk(
+        pool: PoolId,
+        depth: u8,
+        values: &[Value],
+    ) -> Result<IndexedMerkleTree, ImtError> {
+        let mut tree = IndexedMerkleTree::with_depth(pool, depth)?;
+
+        let leaf_count = u64::try_from(values.len())
+            .ok()
+            .and_then(|n| n.checked_add(1))
+            .ok_or(ImtError::CorruptTree("value count overflows u64"))?;
+        if leaf_count > tree.capacity() {
+            return Err(ImtError::CapacityExhausted {
+                depth,
+                capacity: tree.capacity(),
+            });
+        }
+        if values.is_empty() {
+            return Ok(tree);
+        }
+
+        // Reject the same inputs `insert` would, before building anything.
+        let mut sorted: Vec<(Value, u64)> = Vec::with_capacity(values.len().saturating_add(1));
+        sorted.push((Value::ZERO, 0));
+        for (position, value) in values.iter().enumerate() {
+            if value.is_zero() {
+                return Err(ImtError::ReservedValue);
+            }
+            let index = u64::try_from(position)
+                .ok()
+                .and_then(|p| p.checked_add(1))
+                .ok_or(ImtError::CorruptTree("leaf index overflows u64"))?;
+            sorted.push((*value, index));
+        }
+        sorted.sort_unstable_by_key(|(value, _)| *value);
+        if sorted
+            .windows(2)
+            .any(|pair| pair.first().map(|p| p.0) == pair.get(1).map(|p| p.0))
+        {
+            return Err(ImtError::DuplicateValue);
+        }
+
+        // Successor links come from the sorted order, exactly as insertion
+        // would have left them.
+        let mut leaves = vec![Leaf::SENTINEL; sorted.len()];
+        for (position, (value, index)) in sorted.iter().enumerate() {
+            let (next_value, next_index) = match sorted.get(position.saturating_add(1)) {
+                Some((next, at)) => (*next, *at),
+                None => (Value::ZERO, 0),
+            };
+            let slot = usize::try_from(*index)
+                .ok()
+                .and_then(|i| leaves.get_mut(i))
+                .ok_or(ImtError::CorruptTree("leaf index out of range"))?;
+            *slot = Leaf {
+                value: *value,
+                next_value,
+                next_index,
+            };
+        }
+
+        for (position, leaf) in leaves.iter().enumerate() {
+            let index = u64::try_from(position)
+                .map_err(|_| ImtError::CorruptTree("leaf index overflows u64"))?;
+            tree.nodes.insert((0, index), leaf.hash(pool));
+            if index > 0 {
+                tree.index_by_value.insert(leaf.value, index);
+            }
+        }
+        tree.leaves = leaves;
+
+        // Fold upward. The span at each level is the number of nodes covering
+        // the dense leaf prefix, floored at one so the spine to the root is
+        // written too — `root()` reads `(depth, 0)` and would otherwise fall
+        // back to the empty digest.
+        //
+        // This writes exactly the set of entries the incremental path writes:
+        // the ancestors of every occupied leaf, plus that spine.
+        let occupied = tree.leaves.len() as u64;
+        for level in 0..depth {
+            let span = occupied
+                .div_ceil(
+                    1u64.checked_shl(u32::from(level).saturating_add(1))
+                        .unwrap_or(u64::MAX),
+                )
+                .max(1);
+            for parent in 0..span {
+                let left = tree.node(level, parent.saturating_mul(2));
+                let right = tree.node(level, parent.saturating_mul(2).saturating_add(1));
+                let digest = hash::imt_node(pool, &left, &right);
+                tree.nodes.insert((level.saturating_add(1), parent), digest);
+            }
+        }
+
+        Ok(tree)
     }
 
     /// Reverses the most recent [`IndexedMerkleTree::insert`].
@@ -1095,6 +1210,95 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[24..].copy_from_slice(&n.to_be_bytes());
         Value::from_bytes(bytes)
+    }
+
+    // ---- from_values_bulk ----
+
+    /// **The property persistence rests on.** A bulk-built tree must be
+    /// indistinguishable from a replayed one — every leaf, every value-index
+    /// entry, every internal node — because a reloaded snapshot has to support
+    /// undo and rollback, which compare exact state rather than roots.
+    #[test]
+    fn bulk_matches_sequential() {
+        for depth in [1u8, 2, 5, 8, 12] {
+            for count in [0u64, 1, 2, 3, 4, 7, 8, 9, 16, 17, 63, 100] {
+                if count.saturating_add(1) > (1u64 << depth) {
+                    continue;
+                }
+                let values: Vec<Value> = (1..=count).map(v).collect();
+
+                let sequential = IndexedMerkleTree::from_values(POOL, depth, &values).unwrap();
+                let bulk = IndexedMerkleTree::from_values_bulk(POOL, depth, &values).unwrap();
+
+                assert_eq!(
+                    fingerprint(&bulk),
+                    fingerprint(&sequential),
+                    "depth {depth}, {count} values: bulk build differs from replay"
+                );
+            }
+        }
+    }
+
+    /// Insertion order decides leaf indices and therefore roots, so the bulk
+    /// path must honour it rather than only the set of values.
+    #[test]
+    fn bulk_honours_insertion_order() {
+        let a: Vec<Value> = [5u64, 1, 9, 3].into_iter().map(v).collect();
+        let b: Vec<Value> = [9u64, 5, 3, 1].into_iter().map(v).collect();
+
+        let bulk_a = IndexedMerkleTree::from_values_bulk(POOL, 8, &a).unwrap();
+        let bulk_b = IndexedMerkleTree::from_values_bulk(POOL, 8, &b).unwrap();
+        let seq_a = IndexedMerkleTree::from_values(POOL, 8, &a).unwrap();
+
+        assert_eq!(fingerprint(&bulk_a), fingerprint(&seq_a));
+        assert_ne!(bulk_a.root(), bulk_b.root());
+    }
+
+    /// A bulk-built tree must accept further insertions and stay in step, or a
+    /// reloaded snapshot could not continue applying blocks.
+    #[test]
+    fn a_bulk_built_tree_can_be_extended() {
+        let initial: Vec<Value> = (1..=20u64).map(v).collect();
+        let mut bulk = IndexedMerkleTree::from_values_bulk(POOL, 10, &initial).unwrap();
+        let mut sequential = IndexedMerkleTree::from_values(POOL, 10, &initial).unwrap();
+
+        for n in 21..=30u64 {
+            bulk.insert(v(n)).unwrap();
+            sequential.insert(v(n)).unwrap();
+        }
+        assert_eq!(fingerprint(&bulk), fingerprint(&sequential));
+    }
+
+    /// And undo must work on it, since rollback after a restart is the whole
+    /// point of persisting state.
+    #[test]
+    fn a_bulk_built_tree_can_be_undone() {
+        let initial: Vec<Value> = (1..=20u64).map(v).collect();
+        let mut bulk = IndexedMerkleTree::from_values_bulk(POOL, 10, &initial).unwrap();
+        let before = fingerprint(&bulk);
+
+        let proof = bulk.insert(v(99)).unwrap();
+        bulk.undo_insert(v(99), &proof).unwrap();
+
+        assert_eq!(fingerprint(&bulk), before);
+    }
+
+    #[test]
+    fn bulk_rejects_what_insert_rejects() {
+        assert_eq!(
+            IndexedMerkleTree::from_values_bulk(POOL, 8, &[v(1), Value::ZERO]).unwrap_err(),
+            ImtError::ReservedValue
+        );
+        assert_eq!(
+            IndexedMerkleTree::from_values_bulk(POOL, 8, &[v(1), v(1)]).unwrap_err(),
+            ImtError::DuplicateValue
+        );
+        // Depth 2 holds four leaves; the sentinel takes one.
+        let too_many: Vec<Value> = (1..=4u64).map(v).collect();
+        assert!(matches!(
+            IndexedMerkleTree::from_values_bulk(POOL, 2, &too_many),
+            Err(ImtError::CapacityExhausted { .. })
+        ));
     }
 
     // ---- rebuild_root ----

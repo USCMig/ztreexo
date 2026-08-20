@@ -114,6 +114,24 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 95.7,
         "min_branches": 27,  # measured 29/32
     },
+    # Phase 3's on-disk snapshot format. It earns an entry rather than being
+    # absorbed into the workspace average because deserialising a file someone
+    # else wrote is the crate's only untrusted-input surface, and an
+    # unexercised arm there is a parser accepting something it should refuse.
+    #
+    # The floor started life 4 points lower. `load` verifies magic and checksum
+    # before calling `decode`, so every structural check inside `decode` is
+    # unreachable by any edit that disturbs the payload — the checksum fires
+    # first. Three tests were written believing otherwise and passed on
+    # ChecksumMismatch while the arms they were named for never ran. This gate
+    # is what surfaced it: green tests, zero coverage, directly above each
+    # other. Reaching those arms needs a forged file that reseals a valid
+    # checksum over an edited payload, which is also the realistic adversary.
+    "crates/zutreexo-chain/src/store.rs": {
+        "regions": 89.1,
+        "lines": 88.6,
+        "min_branches": 18,  # measured 20/24
+    },
     # The differential harness and the reorg fuzzer. Test infrastructure, but
     # also the project's primary correctness signal (CLAUDE.md §5 rule 2): a
     # silent regression in either disables what catches everything else.
@@ -171,20 +189,32 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     },
 }
 
-# Measured 90.12 / 89.34 / 76.42 in the CI profile at stage 2d, after
-# `cargo llvm-cov clean`, with source.rs's new tests included. Lower than
-# stage 2c's 93.48 / 92.22 / 80.37 despite those tests, because genesis_replay.rs
-# joined the workspace total at a permanent, structural 0% (see its
-# `never_measured` entry above) — 272 regions / 161 lines / 20 branches that
-# cannot be raised by writing more tests. Confirmed stable across two
-# back-to-back clean measurements before being used as the new floor.
+# Measured 89.66 / 88.88 / 76.81 in the CI profile at Phase 3, after
+# `cargo llvm-cov clean`. Confirmed stable across two back-to-back clean
+# measurements — identical to four decimal places — before being used as the
+# new floor.
+#
+# Regions and lines fall slightly against stage 2d's 90.12 / 89.34 despite
+# store.rs being well covered in its own right, because store.rs is 506 regions
+# at 89.13% and the average it joined was 90.12%. Adding a well-tested file can
+# still lower a mean; that is arithmetic, not a regression, and the per-file
+# floor above is what actually guards the new code.
+#
+# Branches went the other way, 76.42 -> 76.81, from the forged-snapshot tests
+# described in the store.rs entry.
+#
+# The 2d note about genesis_replay.rs still applies: it sits at a permanent,
+# structural 0% in the total (272 regions / 161 lines / 20 branches) that no
+# amount of testing can raise.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 90.1,
-    "lines": 89.3,
+    "regions": 89.6,
+    "lines": 88.8,
     # Percentage, not a count: the workspace denominator grows as code is added,
-    # so an absolute floor here would have to be edited on every commit. Carries
-    # extra tolerance for the branch jitter described below.
-    "branches": 76.4,
+    # so an absolute floor here would have to be edited on every commit. Set
+    # 0.3 below the measurement rather than at the usual one-decimal truncation,
+    # because this is the one workspace metric the jitter described below can
+    # move, and a flaky gate gets switched off.
+    "branches": 76.5,
 }
 
 # ---------------------------------------------------------------------------

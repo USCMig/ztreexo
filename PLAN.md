@@ -35,7 +35,7 @@ infrastructure, `fix/<topic>` for defects.
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
 | 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, peak 32.7 GiB |
-| 3 | Persistence, snapshots, crash consistency | — | not started |
+| 3 | Persistence, snapshots, crash consistency | `phase-3-persistence` | **complete** — DoD met: 25 SIGKILLs mid-save, store intact every time, with a non-atomic control proving the harness detects corruption. Merged `main` 2026-08-20; the merge's coverage run found three snapshot tests passing for the wrong reason ([D24](docs/design.md)) |
 | 4 | Bridge node (proof serving) | — | not started |
 | 5 | Compact state node, published benchmarks | — | not started |
 | 6 | Fuzzing, DoS analysis, privacy review | — | not started |
@@ -44,6 +44,15 @@ infrastructure, `fix/<topic>` for defects.
 ## Known gaps, carried deliberately
 
 These are open and tracked here rather than discovered later.
+
+**Every check inside `decode` is reachable only through a forged file.** `load`
+verifies magic and checksum before calling `decode`, so the checksum masks every
+structural check behind it. Three Phase 3 tests were written without noticing
+and passed on `ChecksumMismatch` while the arms they named never executed; the
+coverage floor caught it, not the suite. Fixed, mutation-checked, and written up
+as D24. **Carried forward: Phase 6's deserialisation fuzzing must reseal a valid
+checksum over each mutated payload, or it will spend its entire budget bouncing
+off the checksum and report a clean run having tested nothing.**
 
 **Phase 1 DoD is not met, and by more than it first appeared.** It requires
 *"100% branch coverage on `imt.rs`"*. That criterion had never been measured
@@ -170,6 +179,15 @@ the precomputed leaf hash rather than the whole `UtxoLeaf` would cut that by
 about an order of magnitude, at the cost of rollback needing another source for
 leaf contents. Worth doing before Phase 3 freezes an on-disk format that will
 inherit the same shape.
+
+**A snapshot does not shrink the working set, only the startup cost.** Loading
+a 3.85 GB snapshot produces 12.7 GiB resident — essentially what the replay used.
+That is the format being a faithful round trip rather than a compression scheme,
+and it is correct, but it means the 32.7 GiB tip footprint is untouched. The
+`UtxoLeaf`-to-leaf-hash change would cut the dominant term by roughly an order of
+magnitude. Phase 3 was the natural moment for it and it was **not** done, so the
+on-disk format now encodes whole leaves; changing that later means a format
+version bump and a migration, which is exactly what the version byte is for.
 
 **The transparent side is blocked upstream.** `rustreexo` 0.6.0 generates
 invalid inclusion proofs for any leaf whose sibling has been deleted, reproduced
