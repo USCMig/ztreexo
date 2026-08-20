@@ -10,8 +10,10 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+thiserror.workspace = true
 zutreexo-accumulator.workspace = true
 zutreexo-chain.workspace = true
+zutreexo-csn.workspace = true
 
 [lints]
 workspace = true

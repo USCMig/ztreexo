@@ -43,9 +43,10 @@
 
 use std::collections::BTreeMap;
 
-use zutreexo_accumulator::imt::InsertionProof;
+use zutreexo_accumulator::imt::{empty_subtree_hashes, InsertionProof};
 use zutreexo_accumulator::proof::{
-    decode_utxo_proof, encode_utxo_proof, CanonicalSerialize, ProofCodecError, Reader,
+    decode_utxo_proof, encode_utxo_proof, read_insertion_sparse, write_insertion_sparse,
+    CanonicalSerialize, ProofCodecError, Reader,
 };
 use zutreexo_accumulator::{Hash, PoolId, UtxoLeaf, UtxoProof};
 
@@ -69,6 +70,13 @@ pub struct BlockProofBundle {
     pub utxo_proof: UtxoProof,
     /// Nullifier insertions per pool, in application order.
     pub insertions: BTreeMap<PoolId, Vec<InsertionProof>>,
+    /// Depth every nullifier tree in this bundle was built at.
+    ///
+    /// Carried because the sparse path encoding omits the empty-subtree
+    /// siblings and the decoder has to derive them, which needs the depth. A
+    /// verifier whose own depth disagrees will fail on the first proof rather
+    /// than compute a wrong root.
+    pub depth: u8,
 }
 
 impl BlockProofBundle {
@@ -167,6 +175,7 @@ pub fn apply_and_prove(
 
     let bundle = BlockProofBundle {
         height,
+        depth: state.depth(),
         spent,
         utxo_proof,
         insertions: insertions_from(&outcome.delta),
@@ -204,15 +213,6 @@ fn write_bytes(value: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(value.get(..len as usize).unwrap_or(value));
 }
 
-/// Reads a little-endian `u32`.
-fn read_u32(reader: &mut Reader<'_>) -> Result<u32, ProofCodecError> {
-    let bytes = reader.take(4)?;
-    let array: [u8; 4] = bytes.try_into().map_err(|_| ProofCodecError::Malformed {
-        reason: "short u32",
-    })?;
-    Ok(u32::from_le_bytes(array))
-}
-
 /// Reads a length-prefixed byte string, bounded by what is actually left.
 ///
 /// The bound is checked before allocating. `docs/design.md` D13 records the
@@ -220,7 +220,7 @@ fn read_u32(reader: &mut Reader<'_>) -> Result<u32, ProofCodecError> {
 /// of the data it describes is an unbounded allocation from a hostile peer, and
 /// a bridge's clients are exactly that.
 fn read_bytes(reader: &mut Reader<'_>) -> Result<Vec<u8>, ProofCodecError> {
-    let len = read_u32(reader)? as usize;
+    let len = reader.u32_le()? as usize;
     if len > reader.remaining() {
         return Err(ProofCodecError::DeclaredLengthExceedsInput {
             field: "byte string",
@@ -242,8 +242,8 @@ fn write_leaf(leaf: &UtxoLeaf, out: &mut Vec<u8>) {
 
 fn read_leaf(reader: &mut Reader<'_>) -> Result<UtxoLeaf, ProofCodecError> {
     let txid = reader.hash()?;
-    let vout = read_u32(reader)?;
-    let height = read_u32(reader)?;
+    let vout = reader.u32_le()?;
+    let height = reader.u32_le()?;
     let flag = reader.u8()?;
     // Anything other than 0 or 1 means the encoder and decoder disagree about
     // the layout, which is worth failing on rather than coercing to `true`.
@@ -280,22 +280,30 @@ impl CanonicalSerialize for BlockProofBundle {
 
         write_bytes(&encode_utxo_proof(&self.utxo_proof), out);
 
+        // The depth is written once, not per proof: every pool in a bundle
+        // comes from the same `ChainAccumulators` and so shares it, and the
+        // sparse path encoding below needs the decoder to agree on it.
+        out.push(self.depth);
+
         let pools = u8::try_from(self.insertions.len()).unwrap_or(u8::MAX);
         out.push(pools);
         for (pool, proofs) in self.insertions.iter().take(pools as usize) {
             out.push(pool.code());
             let count = u32::try_from(proofs.len()).unwrap_or(u32::MAX);
             out.extend_from_slice(&count.to_le_bytes());
+            // Derived once per pool rather than per proof: it is `depth`
+            // hashes and every proof in the pool omits against the same ladder.
+            let ladder = empty_subtree_hashes(*pool, self.depth).unwrap_or_default();
             for proof in proofs.iter().take(count as usize) {
-                write_bytes(&proof.to_bytes(), out);
+                write_insertion_sparse(proof, &ladder, out);
             }
         }
     }
 
     fn read_body(reader: &mut Reader<'_>) -> Result<Self, ProofCodecError> {
-        let height = read_u32(reader)?;
+        let height = reader.u32_le()?;
 
-        let spent_count = read_u32(reader)? as usize;
+        let spent_count = reader.u32_le()? as usize;
         // A leaf is at least 77 bytes, so a count larger than the remaining
         // bytes could allow is a lie and must not reach `with_capacity`.
         if spent_count > reader.remaining() {
@@ -312,12 +320,13 @@ impl CanonicalSerialize for BlockProofBundle {
 
         let utxo_proof = decode_utxo_proof(&read_bytes(reader)?)?;
 
+        let depth = reader.u8()?;
         let pools = reader.u8()?;
         let mut insertions = BTreeMap::new();
         for _ in 0..pools {
             let code = reader.u8()?;
             let pool = PoolId::from_code(code).ok_or(ProofCodecError::UnknownPool { code })?;
-            let count = read_u32(reader)? as usize;
+            let count = reader.u32_le()? as usize;
             if count > reader.remaining() {
                 return Err(ProofCodecError::DeclaredLengthExceedsInput {
                     field: "insertion proofs",
@@ -325,9 +334,13 @@ impl CanonicalSerialize for BlockProofBundle {
                     remaining: reader.remaining(),
                 });
             }
+            let ladder =
+                empty_subtree_hashes(pool, depth).map_err(|_| ProofCodecError::Malformed {
+                    reason: "bundle declares an invalid tree depth",
+                })?;
             let mut proofs = Vec::with_capacity(count);
             for _ in 0..count {
-                proofs.push(InsertionProof::from_bytes(&read_bytes(reader)?)?);
+                proofs.push(read_insertion_sparse(reader, &ladder)?);
             }
             // A repeated pool code would silently drop the earlier entry.
             if insertions.insert(pool, proofs).is_some() {
@@ -339,6 +352,7 @@ impl CanonicalSerialize for BlockProofBundle {
 
         Ok(BlockProofBundle {
             height,
+            depth,
             spent,
             utxo_proof,
             insertions,

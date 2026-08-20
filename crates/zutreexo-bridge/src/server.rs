@@ -1,0 +1,245 @@
+//! A minimal HTTP/1.1 server carrying binary bodies, and the client for it.
+//!
+//! Deliberately small — roughly the same shape as `zutreexo-testkit`'s zebrad
+//! client, and for the same reason. What is being tested is the *codec* and the
+//! bridge's answers; an HTTP stack would add dependency surface without adding
+//! anything to that. See `docs/design.md` D27 for why this is not gRPC.
+//!
+//! # What it does not do
+//!
+//! No TLS, no authentication, no concurrency beyond one connection at a time,
+//! no rate limiting. **Bind it to loopback.** A bridge exposed to the network
+//! is a denial-of-service target — a peer requesting proofs for every UTXO is
+//! the explicit Phase 6 concern — and none of that analysis has been done.
+//! [`serve_once`] exists so a test can drive a real socket without a thread
+//! pool.
+
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+
+use zutreexo_accumulator::proof::{CanonicalSerialize, NonMembershipResponse};
+use zutreexo_chain::BlockProofBundle;
+
+use crate::wire::{status, Request, Roots};
+use crate::Bridge;
+
+/// Serves one request on an accepted connection.
+///
+/// Errors are transport-level only: a request that fails to decode is answered
+/// with [`status::BAD_REQUEST`] rather than dropped, because a client that gets
+/// no reply cannot tell a malformed request from a hung bridge.
+pub fn serve_once(bridge: &Bridge, stream: &mut TcpStream) -> std::io::Result<()> {
+    let body = match read_request(stream) {
+        Ok(body) => body,
+        Err(error) => {
+            write_response(stream, status::BAD_REQUEST, &[])?;
+            return Err(error);
+        }
+    };
+
+    let (code, payload) = match Request::from_bytes(&body) {
+        Err(_) => (status::BAD_REQUEST, Vec::new()),
+        Ok(Request::AccumulatorRoots) => (status::OK, bridge.roots().to_bytes()),
+        Ok(Request::BlockProofBundle { height }) => match bridge.bundle(height) {
+            Some(bundle) => (status::OK, bundle.to_bytes()),
+            None => (status::NO_SUCH_HEIGHT, Vec::new()),
+        },
+        Ok(Request::NullifierNonMembership { pool, nullifier }) => {
+            match bridge.prove_unspent(pool, nullifier) {
+                Ok(Some(proof)) => (status::OK, proof.to_bytes()),
+                Ok(None) => (status::ALREADY_SPENT, Vec::new()),
+                Err(_) => (status::INTERNAL, Vec::new()),
+            }
+        }
+    };
+
+    write_response(stream, code, &payload)
+}
+
+/// Accepts and serves connections until `limit` have been handled.
+///
+/// Single-threaded and sequential. Adequate for a test or a local sidecar;
+/// see the module docs before pointing it at anything else.
+pub fn serve(bridge: &Bridge, listener: &TcpListener, limit: usize) -> std::io::Result<()> {
+    for _ in 0..limit {
+        let (mut stream, _) = listener.accept()?;
+        // One bad connection must not take the server down.
+        let _ = serve_once(bridge, &mut stream);
+    }
+    Ok(())
+}
+
+/// Reads an HTTP request and returns its body.
+fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    // Read until the header terminator, then exactly `Content-Length` more.
+    // Reading to EOF would work only if the client half-closed, and a client
+    // that expects a reply cannot.
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let header_end = loop {
+        if let Some(at) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at;
+        }
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed before the request headers ended",
+            ));
+        }
+        buffer.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
+        // A header block this large is not a request this server serves.
+        if buffer.len() > 16 * 1024 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "request headers too long",
+            ));
+        }
+    };
+
+    let headers = String::from_utf8_lossy(buffer.get(..header_end).unwrap_or(&[])).to_lowercase();
+    let length: usize = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0);
+    // Bounded before allocating: a hostile Content-Length is otherwise a free
+    // out-of-memory (the same defect `docs/design.md` D13 records upstream).
+    if length > 16 * 1024 * 1024 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "request body too large",
+        ));
+    }
+
+    let mut body = buffer
+        .get(header_end.saturating_add(4)..)
+        .unwrap_or(&[])
+        .to_vec();
+    while body.len() < length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
+    }
+    body.truncate(length);
+    Ok(body)
+}
+
+fn write_response(stream: &mut TcpStream, code: u8, payload: &[u8]) -> std::io::Result<()> {
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        payload.len().saturating_add(1)
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(&[code])?;
+    stream.write_all(payload)?;
+    stream.flush()
+}
+
+/// A client for [`serve`].
+#[derive(Clone, Debug)]
+pub struct BridgeClient {
+    address: String,
+}
+
+/// Why a bridge call failed.
+#[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
+pub enum ClientError {
+    /// Could not reach the bridge or the connection failed mid-call.
+    #[error("bridge transport: {0}")]
+    Transport(String),
+
+    /// The bridge answered, but not with the payload.
+    #[error("bridge returned status {status}")]
+    Status {
+        /// The status byte. See [`crate::wire::status`].
+        status: u8,
+    },
+
+    /// The payload did not decode.
+    #[error("bridge payload: {0}")]
+    Decode(String),
+}
+
+impl BridgeClient {
+    /// Points a client at `host:port`.
+    pub fn new(address: &str) -> BridgeClient {
+        BridgeClient {
+            address: address.to_owned(),
+        }
+    }
+
+    /// One request/response cycle on a fresh connection.
+    fn call(&self, request: &Request) -> Result<(u8, Vec<u8>), ClientError> {
+        let body = request.to_bytes();
+        let header = format!(
+            "POST /zutreexo HTTP/1.1\r\nHost: {}\r\nContent-Type: application/octet-stream\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            self.address,
+            body.len()
+        );
+
+        let mut stream = TcpStream::connect(&self.address)
+            .map_err(|e| ClientError::Transport(format!("connect {}: {e}", self.address)))?;
+        stream
+            .write_all(header.as_bytes())
+            .and_then(|()| stream.write_all(&body))
+            .map_err(|e| ClientError::Transport(format!("write: {e}")))?;
+
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .map_err(|e| ClientError::Transport(format!("read: {e}")))?;
+
+        // `Connection: close` means the body ends at EOF.
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .ok_or_else(|| ClientError::Transport("no header terminator".to_owned()))?;
+        let payload = raw.get(split.saturating_add(4)..).unwrap_or(&[]);
+        let (status, rest) = payload
+            .split_first()
+            .ok_or_else(|| ClientError::Transport("empty response".to_owned()))?;
+        Ok((*status, rest.to_vec()))
+    }
+
+    /// Fetches the bundle for one height.
+    pub fn block_proof_bundle(&self, height: u32) -> Result<BlockProofBundle, ClientError> {
+        let (status, body) = self.call(&Request::BlockProofBundle { height })?;
+        if status != status::OK {
+            return Err(ClientError::Status { status });
+        }
+        BlockProofBundle::from_bytes(&body).map_err(|e| ClientError::Decode(e.to_string()))
+    }
+
+    /// Fetches the bridge's roots.
+    pub fn roots(&self) -> Result<Roots, ClientError> {
+        let (status, body) = self.call(&Request::AccumulatorRoots)?;
+        if status != status::OK {
+            return Err(ClientError::Status { status });
+        }
+        Roots::from_bytes(&body).map_err(|e| ClientError::Decode(e.to_string()))
+    }
+
+    /// Asks whether a nullifier is unspent.
+    ///
+    /// `Ok(None)` means the bridge says it is already spent. That is an answer,
+    /// not an error, and it is usually the one the caller wanted.
+    pub fn prove_unspent(
+        &self,
+        pool: zutreexo_accumulator::PoolId,
+        nullifier: zutreexo_accumulator::imt::Value,
+    ) -> Result<Option<NonMembershipResponse>, ClientError> {
+        let (status, body) = self.call(&Request::NullifierNonMembership { pool, nullifier })?;
+        match status {
+            status::OK => NonMembershipResponse::from_bytes(&body)
+                .map(Some)
+                .map_err(|e| ClientError::Decode(e.to_string())),
+            status::ALREADY_SPENT => Ok(None),
+            other => Err(ClientError::Status { status: other }),
+        }
+    }
+}

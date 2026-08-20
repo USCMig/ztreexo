@@ -365,6 +365,32 @@ pub struct InsertionProof {
     pub new_leaf_siblings: Vec<Hash>,
 }
 
+/// The canonical hash of an empty subtree at each level, bottom-up.
+///
+/// `out[0]` is the empty *leaf* hash, `out[1]` the hash of two empty leaves,
+/// and so on for `depth` levels. Pool-specific, because every hash in this
+/// crate is domain-separated (CLAUDE.md §5 rule 4) — an empty subtree in the
+/// Orchard tree is not the same value as one in Sapling's.
+///
+/// # Why this is public
+///
+/// These values are *derivable*, which makes them compressible on the wire. A
+/// depth-40 tree holding 2^25.7 nullifiers is overwhelmingly empty, so most
+/// siblings on any path are one of these — 71.4% of them, measured
+/// (`docs/benchmarks.md`, Phase 4a). The sparse proof encoding in `proof.rs`
+/// omits them and the decoder puts them back from here, so both sides must
+/// derive the identical ladder.
+pub fn empty_subtree_hashes(pool: PoolId, depth: u8) -> Result<Vec<Hash>, ImtError> {
+    check_depth(depth)?;
+    let mut out = Vec::with_capacity(usize::from(depth));
+    let mut empty = hash::imt_empty_leaf(pool);
+    for _ in 0..depth {
+        out.push(empty);
+        empty = hash::imt_node(pool, &empty, &empty);
+    }
+    Ok(out)
+}
+
 /// Rejects depths outside the supported range.
 pub fn check_depth(depth: u8) -> Result<(), ImtError> {
     if !(MIN_DEPTH..=MAX_DEPTH).contains(&depth) {

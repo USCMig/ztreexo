@@ -3361,8 +3361,10 @@ dependencies = [
 name = "zutreexo-bridge"
 version = "0.0.0"
 dependencies = [
+ "thiserror 2.0.20",
  "zutreexo-accumulator",
  "zutreexo-chain",
+ "zutreexo-csn",
 ]
 
 [[package]]

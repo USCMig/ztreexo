@@ -37,7 +37,7 @@ infrastructure, `fix/<topic>` for defects.
 | 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, peak 32.7 GiB |
 | 3 | Persistence, snapshots, crash consistency | `phase-3-persistence` | **complete** — DoD met: 25 SIGKILLs mid-save, store intact every time, with a non-atomic control proving the harness detects corruption. Merged `main` 2026-08-20; the merge's coverage run found three snapshot tests passing for the wrong reason ([D24](docs/design.md)) |
 | 4a | Proof bundle + compact state node verification core | `phase-4a-bundle` | **complete** — a roots-only node tracks the bridge byte-for-byte over real mainnet blocks; bandwidth measured and it is unflattering ([`docs/benchmarks.md`](docs/benchmarks.md)) |
-| 4b | Bridge service transport (gRPC/JSON-RPC), Zaino integration | — | not started |
+| 4b | Sparse wire format, bridge service, served IBD | `phase-4a-bundle` | **complete** — Phase 4 DoD met over a real socket; sparse paths cut wallet proofs 53.2% and bundle overhead 170.5% to 152.6%. Not gRPC ([D27](docs/design.md)) |
 | 5a | Headline measurement: nullifier-check cost vs gap length | `phase-4a-bundle` | **complete** — the claim holds decisively for spend-status queries (317x to 31,705x at a year's gap) and barely at all for full sync (<=14.7% of bytes, 0% of trial decryption) |
 | 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | — | not started |
 | 6 | Fuzzing, DoS analysis, privacy review | — | not started |
@@ -46,6 +46,31 @@ infrastructure, `fix/<topic>` for defects.
 ## Known gaps, carried deliberately
 
 These are open and tracked here rather than discovered later.
+
+**Phase 6's deserialisation fuzzing should not wait for Phase 6.** A three-line
+bit-flip loop written to raise a coverage number found a denial-of-service hole
+in our own proof-header guard within seconds ([D29](docs/design.md)) — a
+declared hash count of 2^32+1 reaching `with_capacity` and aborting the process
+on a 141 GB allocation. The assumption that D13 was purely an upstream problem
+to wait out was wrong: the wrapper written to contain it did not. Every decoder
+added from here should get a bit-flip and truncation sweep at the time it is
+written, not at Phase 6.
+
+**The evidence for dropping the transparent forest is now three-deep.** Phase 0
+found 27.5M transparent outputs at tip, not the small set expected; Phase 4a/4b
+put 73.0% of proof bandwidth in Utreexo inclusion proofs; and the overhead rises
+with height. Unlike the nullifier side there is no compression left to apply — a
+Utreexo forest is dense by construction, so its proofs carry no derivable
+filler. CLAUDE.md Phase 5 says to narrow rather than ship both out of sunk cost.
+**Not decided yet**: Phase 5b's storage and latency figures are the other half
+of the argument.
+
+**A bridge cannot be multi-threaded as built.** `ChainAccumulators` is not
+`Send` because `rustreexo`'s `MemForest` is `Rc`/`Weak` with interior
+mutability — the same root cause as mit-dci/rustreexo#151. Concurrency has to
+come from owning the state on one thread and passing requests over a channel.
+The server has no TLS, auth, rate limiting or proof-size caps either; bind it to
+loopback until Phase 6.
 
 **The headline result is real but gated on Phase 7.** A non-membership proof is
 only meaningful against a trusted root, and nothing commits accumulator roots to
