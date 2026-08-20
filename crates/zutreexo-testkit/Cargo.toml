@@ -22,11 +22,11 @@ hex.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 zebra-chain.workspace = true
+zutreexo-accumulator.workspace = true
 zutreexo-chain.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-zutreexo-accumulator.workspace = true
 
 [lints]
 workspace = true

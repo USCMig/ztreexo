@@ -314,3 +314,115 @@ ZUTREEXO_BENCH_HUGE=1 cargo bench -p zutreexo-accumulator # adds the 10^8 case
 Benchmark inputs come from a seeded xorshift generator, never from system
 entropy or time, so runs are comparable across machines and dates (CLAUDE.md §5
 rule 5).
+
+---
+
+## Stage 2d — genesis-to-tip replay, 2026-08-18
+
+`cargo run --release -p zutreexo-testkit --bin genesis_replay`, depth 40,
+against a synced zebrad at tip 3,452,735.
+
+**All 3,452,736 blocks applied from genesis with zero errors.** 7h02m wall
+clock, peak RSS 32.7 GiB. 71 from-scratch root rebuilds, all matching the
+incremental roots.
+
+That satisfies the amended Phase 2 definition of done. It is a substantive
+claim rather than an absence of evidence: the IMT rejects duplicate nullifiers
+and the applier rejects unresolvable spends, so a mis-parsed nullifier would
+collide and a mis-parsed outpoint would fail to resolve. Neither happened across
+54.1M nullifiers and 3.45M blocks.
+
+A first attempt stopped at height 1,950,000 on a 24 GiB ceiling. The numbers
+below match that run exactly at every shared checkpoint, which is unplanned but
+welcome evidence of determinism.
+
+### Final state at tip
+
+| | count |
+|---|---|
+| unspent transparent outputs | 27,529,579 |
+| Sprout nullifiers | 1,547,198 |
+| Sapling nullifiers | 2,129,852 |
+| Orchard nullifiers | 50,392,547 |
+| Ironwood nullifiers | 70,380 |
+| **total nullifiers** | **54,139,977** |
+
+The transparent forest holds 12 perfect trees.
+
+### Growth, and where the cost lives
+
+| height | unspent outputs | orchard | RSS | rate |
+|---|---|---|---|---|
+| 100,000 | 13,637,623 | 0 | 7.2 GiB | 1,222 blk/s |
+| 300,000 | 28,203,068 | 0 | 16.3 GiB | 253 blk/s |
+| 1,700,000 | 21,180,838 | 296 | 17.4 GiB | 1,507 blk/s |
+| 1,800,000 | 20,164,946 | 4,522,350 | 17.9 GiB | **9 blk/s** |
+| 1,900,000 | 14,837,461 | 23,120,491 | 20.8 GiB | 15 blk/s |
+| 2,100,000 | 15,384,937 | 46,996,381 | 29.5 GiB | 84 blk/s |
+| 2,700,000 | 28,326,522 | 48,941,510 | 33.3 GiB | 762 blk/s |
+| 3,452,735 | 27,529,579 | 50,392,547 | 32.7 GiB | 1,568 blk/s |
+
+Throughput spans **9 to 1,568 blocks/s — a 165× range** — and memory climbs from
+17 GiB to 32 GiB almost entirely between heights 1.7M and 2.1M, which is Orchard
+going from 296 nullifiers to 47 million.
+
+**For Phase 5 this is the headline, not the average.** A p50 taken over quiet
+history understates the p99 a node must survive by more than two orders of
+magnitude. Report per-block latency as a distribution over the sandblasting
+window, not as a mean over all history.
+
+Fetching is never the constraint: RPC serves ~2,000 blocks/s at eight workers,
+so the whole chain downloads in about half an hour.
+
+### The transparent UTXO set is not small
+
+**Closes a Phase 0 gap** — Zebra does not implement `gettxoutsetinfo`, so this
+had never been measured.
+
+27.5M unspent outputs at tip, having peaked at 28.3M and dipped to 14.8M
+mid-history. Early blocks average 257 outputs each (mining-pool payouts), which
+was verified against the node rather than trusted, because 13.6M unspent at
+height 100,000 did not look credible.
+
+CLAUDE.md Phase 5 anticipates that "Zcash's transparent UTXO set is far smaller
+than Bitcoin's, so the transparent-side Utreexo storage win may not justify its
+proof bandwidth". At 27.5M outputs it is the same order of magnitude as
+Bitcoin's. **That expectation should be tested, not assumed, and the answer may
+now favour keeping the transparent forest.**
+
+At roughly 550 bytes per unspent output the transparent index dominates memory
+for the first half of history; Orchard overtakes it after NU5.
+
+### Phase 0 corrections
+
+**Nullifier volume was underestimated 2–3×.** Phase 0 put full-history nullifier
+memory at 4.6–8.5 GiB from 327 B/nullifier. The real total is 54.1M nullifiers.
+Depth 40 still absorbs this with enormous margin — 2^40 is 1.1e12, so the set is
+0.005% of capacity — and the asymmetry argument behind D3 is only strengthened.
+
+**The tip rate is a poor basis for extrapolation.** Orchard averaged ~121
+nullifiers/block through sandblasting against the 6.192/block measured at tip:
+a twenty-fold gap between a quiet period and an attack period. Any capacity
+projection should use the attack rate.
+
+**Ironwood confirms Phase 0 independently.** 70,380 nullifiers over the 24,592
+blocks since activation at 3,428,143 is 2.86/block, against 2.934/block measured
+separately at tip.
+
+### Cold rebuild coverage
+
+71 rebuilds performed, 73 skipped for exceeding the cap. The skips are Orchard
+and Sapling in later history; every pool was checked repeatedly before it grew
+past the ceiling.
+
+This became affordable only after replacing the rebuild algorithm. Replaying
+every insertion via `from_values` costs `2 * depth` hashes per value — 80 at
+depth 40, so 4 billion hashes for Orchard at tip. `IndexedMerkleTree::
+rebuild_root` folds the tree a level at a time instead, roughly three hashes per
+value, about **27× cheaper**. That moved the practical ceiling from 200,000
+values to tens of millions, taking the check from 5 rebuilds on the first run to
+71 here.
+
+It is also a stronger check: successor links are rebuilt by sorting the values
+rather than copied from the stored leaves, so it catches a stale `next_value` or
+`next_index` as well as a stale internal node.

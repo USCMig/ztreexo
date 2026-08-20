@@ -134,6 +134,35 @@ impl ChainAccumulators {
         self.utxo_index.remove(outpoint)
     }
 
+    /// A copy of the outpoint index, for a rollback snapshot.
+    ///
+    /// Cloned rather than borrowed because the caller keeps it across
+    /// subsequent mutations — that is the entire point of a snapshot.
+    pub(crate) fn clone_utxo_index(&self) -> BTreeMap<OutPoint, UtxoLeaf> {
+        self.utxo_index.clone()
+    }
+
+    /// Replaces the transparent half wholesale, as rollback does.
+    ///
+    /// The forest and the index must come from the same snapshot. They are
+    /// replaced together for that reason: an index describing outputs the
+    /// forest does not contain would let `apply_block` compute a leaf hash for
+    /// a leaf that is not there, and the deletion would fail at a height with
+    /// no obvious connection to the reorg that caused it.
+    pub(crate) fn restore_transparent(
+        &mut self,
+        utxos: UtxoForest,
+        index: BTreeMap<OutPoint, UtxoLeaf>,
+    ) {
+        self.utxos = utxos;
+        self.utxo_index = index;
+    }
+
+    /// Rewinds the recorded tip. Rollback owns this; nothing else should.
+    pub(crate) fn set_tip_to(&mut self, height: Option<u32>) {
+        self.tip = height;
+    }
+
     /// The compact per-pool state a light node would hold.
     pub fn imt_states(&self) -> BTreeMap<PoolId, ImtState> {
         self.nullifiers

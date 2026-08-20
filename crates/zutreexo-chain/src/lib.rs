@@ -30,8 +30,12 @@
 pub mod block_apply;
 pub mod extract;
 pub mod pool;
+pub mod rollback;
 
 pub use block_apply::{apply_block, ApplyError, ApplyOptions, ApplyOutcome, StateDelta};
 pub use extract::{summarize_block, BlockSummary, ExtractError, OutPoint};
 pub use pool::{ChainAccumulators, StateCounts};
+pub use rollback::{
+    RollbackError, RollbackJournal, DEFAULT_MAX_ROLLBACK_DEPTH, DEFAULT_SNAPSHOT_INTERVAL,
+};
 pub use zutreexo_accumulator::PoolId;

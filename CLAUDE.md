@@ -268,9 +268,39 @@ Two non-negotiable harness behaviours:
 - **Every divergence becomes a permanent seed** in the fuzzer's regression
   corpus, added and confirmed failing *before* the fix.
 
-**DoD:** bit-exact agreement with Zebra at every checkpoint from genesis to tip;
-reorg fuzzer runs 10⁶ randomized reorgs with zero divergence; every past
-divergence present as a passing seed.
+**DoD (amended 2026-08-17, stage 2d — see below):** a genesis-to-tip replay
+completes with zero apply errors; parse agreement with `zebrad` at checkpoints
+sampled across all history; incremental roots equal a from-scratch rebuild at
+those checkpoints; two replays byte-identical. Reorg fuzzer runs 10⁶ randomized
+reorgs with zero divergence — **met, stage 2c**. Every past divergence present
+as a passing seed.
+
+> **Why this was amended.** The original wording was *"bit-exact agreement with
+> Zebra at every checkpoint from genesis to tip."* That comparison does not
+> exist: **Zebra computes none of the roots this project computes.**
+> `z_gettreestate` returns commitment-tree roots only, §2 deliberately leaves
+> those trees alone, there is no nullifier-root RPC because no other
+> implementation maintains one, and Zebra does not implement
+> `gettxoutsetinfo`. The criterion was unmeetable as written, not merely hard.
+>
+> The amendment is **narrower**, not looser, and keeps Zebra as the oracle for
+> everything Zebra can actually oracle — the parse. What replaces the root
+> comparison is the observation that **mainnet is its own oracle**: the IMT
+> rejects duplicate nullifiers and the applier rejects unresolvable spends, so a
+> clean genesis-forward replay is a substantive claim. A mis-parsed nullifier
+> collides; a mis-parsed outpoint fails to resolve. Neither survives 3.45M
+> blocks quietly.
+>
+> **Explicitly not claimed:** bit-exact root agreement with any other
+> implementation. Nothing else computes these roots. Matching Zebra's
+> commitment-tree `finalRoot` was considered and rejected — it would test
+> `incrementalmerkletree` against Zebra while exercising none of this project's
+> accumulator, and §2 puts those trees out of scope.
+>
+> This changes no research claim. The headline result is Phase 5's
+> nullifier-check cost against gap length, which is a benchmark; correctness of
+> the state transition is what this DoD buys, and the amended form buys it.
+> Reasoning and measurements in `PLAN.md`.
 
 ---
 

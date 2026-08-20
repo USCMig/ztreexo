@@ -236,6 +236,15 @@ impl NaiveState {
         let mut seen: BTreeSet<NaiveOutPoint> = BTreeSet::new();
         let mut unknown = 0usize;
 
+        // A block may spend an output it creates — mainnet block 572 does, with
+        // one transaction spending an earlier one's output. Such an output is
+        // *cancelled*: it never enters the set at all.
+        //
+        // Derived here from the rule, not copied from the implementation. The
+        // oracle's job is to reach the same answer by its own route, so this
+        // scans the block's own creates rather than sharing any helper.
+        let mut cancelled: BTreeSet<NaiveOutPoint> = BTreeSet::new();
+
         for outpoint in &block.spends {
             if !seen.insert(*outpoint) {
                 return Err(NaiveApplyError::DuplicateSpend {
@@ -245,6 +254,8 @@ impl NaiveState {
             }
             if self.utxos.contains(outpoint) {
                 resolved.push(*outpoint);
+            } else if block.creates.contains(outpoint) {
+                cancelled.insert(*outpoint);
             } else if options.allow_unknown_spends {
                 unknown += 1;
             } else {
@@ -277,7 +288,9 @@ impl NaiveState {
             self.utxos.remove(outpoint);
         }
         for outpoint in &block.creates {
-            self.utxos.insert(*outpoint);
+            if !cancelled.contains(outpoint) {
+                self.utxos.insert(*outpoint);
+            }
         }
 
         for pool in POOLS {
@@ -365,13 +378,38 @@ mod tests {
         assert_eq!(state.tip(), Some(2));
     }
 
+    /// A block *may* spend an output it creates, and the output is cancelled.
+    ///
+    /// This test previously asserted the opposite, under the name
+    /// `a_block_cannot_spend_what_it_creates`. The belief was wrong — mainnet
+    /// block 572 spends an output created two transactions earlier — and
+    /// writing it down as a test is part of why it went unquestioned for three
+    /// stages. An oracle that encodes a false rule is worse than no oracle: it
+    /// actively defends the bug.
     #[test]
-    fn a_block_cannot_spend_what_it_creates() {
+    fn a_block_may_spend_what_it_creates_and_the_output_is_cancelled() {
         let mut state = NaiveState::new(8).unwrap();
         let block = NaiveBlock {
             height: 1,
             spends: vec![op(9, 0)],
-            creates: vec![op(9, 0)],
+            creates: vec![op(9, 0), op(8, 0)],
+            ..NaiveBlock::default()
+        };
+        state.apply(&block, NaiveOptions::default()).unwrap();
+
+        // The cancelled output is absent; the other survives.
+        assert_eq!(state.utxo_count(), 1);
+        assert_eq!(state.unknown_spends(), 0, "this is not an unknown spend");
+    }
+
+    /// Spending something neither present nor created here is still an error.
+    #[test]
+    fn an_unrelated_unknown_outpoint_is_still_rejected() {
+        let mut state = NaiveState::new(8).unwrap();
+        let block = NaiveBlock {
+            height: 1,
+            spends: vec![op(9, 0)],
+            creates: vec![op(8, 0)],
             ..NaiveBlock::default()
         };
         assert_eq!(

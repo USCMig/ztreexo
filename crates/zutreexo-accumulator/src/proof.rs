@@ -401,6 +401,19 @@ pub fn decode_utxo_proof(bytes: &[u8]) -> Result<UtxoProof, ProofCodecError> {
 /// Encoded size of one target position in `rustreexo`'s proof format.
 const UTXO_TARGET_LEN: usize = 8;
 
+/// Encoded size of one proof hash: a one-byte variant tag plus the digest.
+///
+/// `rustreexo` writes proof hashes through `AccumulatorHash::write`, so this
+/// tracks [`ZcashNodeHash`](crate::utreexo::ZcashNodeHash)'s encoding rather
+/// than the bare digest length. It is 33, not 32, and the difference is not
+/// cosmetic — an exact-fit check against the wrong width rejects every valid
+/// proof.
+///
+/// `Empty` and `Placeholder` encode to a single byte, so a proof containing
+/// either is shorter than `count * UTXO_HASH_LEN`. The check below is therefore
+/// an upper bound rather than an equality; see its comment.
+const UTXO_HASH_LEN: usize = 1 + HASH_LEN;
+
 /// Checks that a `rustreexo` proof encoding's declared lengths fit its bytes.
 ///
 /// The layout is `targets_len: u64 ‖ targets ‖ hashes_len: u64 ‖ hashes`, all
@@ -426,15 +439,25 @@ fn validate_utxo_proof_header(bytes: &[u8]) -> Result<(), ProofCodecError> {
     reader.take(targets_bytes)?;
 
     let hashes_len = usize::try_from(reader.u64_le()?).unwrap_or(usize::MAX);
-    let hashes_bytes = hashes_len
-        .checked_mul(HASH_LEN)
-        .ok_or(ProofCodecError::UnexpectedEof {
-            offset: 0,
-            needed: usize::MAX,
-        })?;
-    if hashes_bytes != reader.remaining() {
-        // Exact, not `>`: a short input is truncation and a long one is
-        // trailing bytes. Both are rejected, keeping the encoding canonical.
+    let hashes_bytes =
+        hashes_len
+            .checked_mul(UTXO_HASH_LEN)
+            .ok_or(ProofCodecError::UnexpectedEof {
+                offset: 0,
+                needed: usize::MAX,
+            })?;
+    // An upper bound, not an equality. Hash entries are variable width under
+    // the tagged encoding — one byte for `Empty` or `Placeholder`, 33 for
+    // `Some` — so a proof carrying either is legitimately shorter than the
+    // maximum. Requiring an exact fit would reject valid proofs.
+    //
+    // The bound still does the job this function exists for: it makes the
+    // declared count unsatisfiable by the bytes that actually arrived, so a
+    // header claiming a billion hashes in forty bytes is rejected before
+    // anything is allocated. Truncation within the bound is caught by
+    // `rustreexo`'s own parse immediately afterwards, which allocates
+    // incrementally rather than up front.
+    if hashes_bytes < reader.remaining() {
         return Err(ProofCodecError::UnexpectedEof {
             offset: 0,
             needed: hashes_bytes,

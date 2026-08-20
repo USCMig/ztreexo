@@ -156,6 +156,63 @@ fn pollard_proof_generation_also_breaks_after_a_deletion() {
     );
 }
 
+/// `MemForest::clone()` does not produce an independent snapshot.
+///
+/// # Why this is pinned
+///
+/// `MemForest` derives `Clone`, and its fields are `Vec<Rc<Node>>` plus a
+/// `HashMap<_, Weak<Node>>`. `Node` holds its hash in a `Cell`. So the derived
+/// clone copies the `Rc` handles, not the nodes, and mutating either handle is
+/// visible through the other.
+///
+/// That matters directly for reorg handling (stage 2c). Utreexo deletion is not
+/// invertible from a delta — there is no API to reinsert a leaf at its original
+/// position, only `modify(add, del)`, which appends. So undo needs a snapshot,
+/// and `clone()` is the obvious way to take one. It compiles, it reads
+/// correctly, and it silently aliases.
+///
+/// `serialize`/`deserialize` round-trips to a genuinely independent forest and
+/// is the only safe snapshot available. It costs about 79 bytes per leaf.
+///
+/// If this test starts failing, upstream has made `Clone` deep — at which point
+/// `rollback.rs` can use it and drop the serialization round-trip.
+#[test]
+fn memforest_clone_aliases_rather_than_snapshots() {
+    let leaves = eight_leaves();
+    let mut forest: MemForest<BitcoinNodeHash> = MemForest::new();
+    forest.modify(&leaves, &[]).unwrap();
+
+    let snapshot = forest.clone();
+    let before: Vec<_> = snapshot.get_roots().iter().map(|n| n.get_data()).collect();
+
+    forest.modify(&[], &[leaves[0]]).unwrap();
+    let after: Vec<_> = snapshot.get_roots().iter().map(|n| n.get_data()).collect();
+
+    assert_ne!(
+        before, after,
+        "UPSTREAM FIXED: MemForest::clone() is now a real snapshot. \
+         rollback.rs can use it instead of a serialize/deserialize round-trip."
+    );
+
+    // The alternative that does work, pinned alongside so the replacement is
+    // never in doubt.
+    let mut fresh: MemForest<BitcoinNodeHash> = MemForest::new();
+    fresh.modify(&leaves, &[]).unwrap();
+    let mut bytes = Vec::new();
+    fresh.serialize(&mut bytes).unwrap();
+    let restored: MemForest<BitcoinNodeHash> = MemForest::deserialize(&bytes[..]).unwrap();
+
+    let restored_before: Vec<_> = restored.get_roots().iter().map(|n| n.get_data()).collect();
+    fresh.modify(&[], &[leaves[0]]).unwrap();
+    let restored_after: Vec<_> = restored.get_roots().iter().map(|n| n.get_data()).collect();
+
+    assert_eq!(
+        restored_before, restored_after,
+        "serialize/deserialize must give an independent forest; if this fails \
+         there is no safe snapshot mechanism left and 2c needs redesigning"
+    );
+}
+
 /// The consequence for us, stated in our own types: a delete-then-prove cycle
 /// cannot currently be sustained across blocks.
 ///

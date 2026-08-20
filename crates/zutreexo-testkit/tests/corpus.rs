@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use zutreexo_testkit::harness::{load_repro, replay, Fault, HarnessConfig};
+use zutreexo_testkit::reorg::{self, ReorgConfig, ReorgFault};
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
@@ -18,7 +19,28 @@ fn corpus_dir() -> PathBuf {
 ///
 /// `Ok(())` means the seed no longer diverges, which for a committed seed is
 /// the required outcome.
+///
+/// Two kinds of seed exist, distinguished by a `"kind"` field:
+///
+/// * **block** (the default, and what a harness repro writes) — one block plus
+///   the configuration that caught it.
+/// * **reorg** — an RNG seed plus a [`ReorgConfig`], because a reorg
+///   divergence is not a block. It emerges from a *sequence* of rollbacks and
+///   re-applications, and the only compact way to record that is the number the
+///   whole sequence derives from. Without this the fuzzer could find a bug it
+///   was structurally unable to file, which the standing corpus rule forbids.
 fn run_seed(path: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+
+    match value.get("kind").and_then(|k| k.as_str()) {
+        Some("reorg") => run_reorg_seed(path, &value),
+        _ => run_block_seed(path),
+    }
+}
+
+fn run_block_seed(path: &Path) -> Result<(), String> {
     let repro = load_repro(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let blocks = [repro.block];
     match replay(&blocks, &repro.config) {
@@ -28,6 +50,45 @@ fn run_seed(path: &Path) -> Result<(), String> {
             path.display(),
             repro.divergence
         )),
+    }
+}
+
+fn run_reorg_seed(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    let number = |key: &str, fallback: u64| -> u64 {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(fallback)
+    };
+    let defaults = ReorgConfig::default();
+
+    let config = ReorgConfig {
+        depth: u8::try_from(number("depth", u64::from(defaults.depth))).unwrap_or(defaults.depth),
+        chain_len: u32::try_from(number("chain_len", u64::from(defaults.chain_len)))
+            .unwrap_or(defaults.chain_len),
+        max_reorg_depth: u32::try_from(number(
+            "max_reorg_depth",
+            u64::from(defaults.max_reorg_depth),
+        ))
+        .unwrap_or(defaults.max_reorg_depth),
+        snapshot_interval: u32::try_from(number(
+            "snapshot_interval",
+            u64::from(defaults.snapshot_interval),
+        ))
+        .unwrap_or(defaults.snapshot_interval),
+        // Seeds always run the expensive tier every iteration. A seed exists
+        // because something diverged; replaying it with the sampling cadence
+        // could step straight past the iteration that mattered.
+        cold_check_every: 1,
+        fault: None,
+    };
+
+    let seed = number("seed", 0);
+    let iterations = number("iterations", 1_000);
+
+    match reorg::run(seed, iterations, &config) {
+        Ok(_) => Ok(()),
+        Err(divergence) => Err(format!("{}: still diverges: {divergence}", path.display())),
     }
 }
 
@@ -204,6 +265,73 @@ fn repro_config_round_trips() {
     // Always relaxed regardless of what was stored: a seed is one block out of
     // its chain, so requiring contiguity would fail every seed.
     assert!(!repro.config.enforce_contiguous);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The reorg-seed path must be able to reject a bad seed too.
+///
+/// The block-seed runner has `the_runner_detects_a_divergent_seed`; without the
+/// equivalent here, a whole category of corpus entry could silently pass
+/// forever. Uses a fault to guarantee a divergence, then confirms the runner
+/// reports it.
+#[test]
+fn the_runner_detects_a_divergent_reorg_seed() {
+    let dir = std::env::temp_dir().join("zutreexo-corpus-reorg-selftest");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("synthetic-reorg.json");
+
+    // Sanity: this configuration really does diverge when the fault is on.
+    let faulted = ReorgConfig {
+        fault: Some(ReorgFault::AlteredHistory),
+        cold_check_every: 1,
+        ..ReorgConfig::default()
+    };
+    assert!(
+        reorg::run(3, 100, &faulted).is_err(),
+        "the fault no longer diverges, so this self-test proves nothing"
+    );
+
+    // A seed file cannot carry a fault — a committed seed describes real
+    // inputs, not injected damage — so the clean run must pass...
+    let seed = serde_json::json!({
+        "kind": "reorg",
+        "divergence": "synthetic self-test",
+        "seed": 3,
+        "iterations": 100,
+        "depth": 12,
+        "chain_len": 30,
+        "max_reorg_depth": 8,
+        "snapshot_interval": 4,
+    });
+    std::fs::write(&path, format!("{seed:#}\n")).unwrap();
+    assert!(
+        run_seed(&path).is_ok(),
+        "a clean reorg seed should replay without diverging"
+    );
+
+    // ...and a seed pointing at an impossible configuration must fail rather
+    // than be quietly skipped. Depth 1 cannot hold a 30-block chain.
+    let broken = serde_json::json!({
+        "kind": "reorg",
+        "divergence": "synthetic self-test",
+        "seed": 3,
+        "iterations": 100,
+        "depth": 1,
+        "chain_len": 30,
+        "max_reorg_depth": 8,
+        "snapshot_interval": 4,
+    });
+    let broken_path = dir.join("broken-reorg.json");
+    std::fs::write(&broken_path, format!("{broken:#}\n")).unwrap();
+    let outcome = run_seed(&broken_path);
+    assert!(
+        outcome.is_err(),
+        "the reorg-seed runner accepted a seed that cannot possibly succeed; \
+         it cannot be trusted to catch a regression"
+    );
+    eprintln!("reorg-seed runner correctly rejected: {outcome:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
