@@ -26,6 +26,7 @@
 
 pub mod checkpoints;
 pub mod harness;
+pub mod measure;
 pub mod naive;
 pub mod reorg;
 pub mod source;

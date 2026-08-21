@@ -106,6 +106,63 @@ impl RpcSource {
         }
     }
 
+    /// The hash of the block the node currently has at `height`.
+    ///
+    /// # Why a shadow run needs this
+    ///
+    /// Height alone does not identify a block. Following the tip means the
+    /// block at height *h* can be *replaced* — that is what a reorg is — and a
+    /// follower that only tracked heights would apply the replacement on top of
+    /// the block it superseded and diverge silently from then on.
+    ///
+    /// So the shadow runner remembers the hash of every block it applied and
+    /// re-checks it before extending. A mismatch is the signal to unwind. This
+    /// is the first time the rollback path meets a reorg it did not generate
+    /// itself: `tests/reorg_fuzz.rs` ran 10⁶ synthetic ones, all of our own
+    /// construction.
+    pub fn block_hash(&self, height: u32) -> Result<String, SourceError> {
+        let value = self.call("getblockhash", &format!("[{height}]"))?;
+        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+            return Err(SourceError::Response {
+                height,
+                reason: error.to_string(),
+            });
+        }
+        value
+            .get("result")
+            .and_then(|r| r.as_str())
+            .map(str::to_owned)
+            .ok_or(SourceError::Missing { height })
+    }
+
+    /// One block as `zebrad`'s own JSON, at the given verbosity.
+    ///
+    /// # The second oracle, live
+    ///
+    /// `scripts/capture_checkpoints.py` uses this route offline to produce the
+    /// committed checkpoints: our parser goes raw bytes → `zebra_chain`
+    /// deserializer → counts, and this goes the same raw bytes → zebrad's RPC
+    /// serializer → JSON → counts. Agreement means the parse is right rather
+    /// than merely self-consistent, which no amount of comparing our two models
+    /// against each other can establish.
+    ///
+    /// A shadow run does it per block instead of per slice, because at tip
+    /// there is no committed checkpoint to compare against and the blocks
+    /// arriving are ones nobody chose.
+    pub fn block_json(&self, height: u32, verbosity: u8) -> Result<serde_json::Value, SourceError> {
+        let value = self.call("getblock", &format!(r#"["{height}", {verbosity}]"#))?;
+        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+            return Err(SourceError::Response {
+                height,
+                reason: error.to_string(),
+            });
+        }
+        value
+            .get("result")
+            .cloned()
+            .ok_or(SourceError::Missing { height })
+    }
+
     /// One request/response cycle on a fresh connection.
     ///
     /// A connection per call rather than a pool: `zebrad` closes idle

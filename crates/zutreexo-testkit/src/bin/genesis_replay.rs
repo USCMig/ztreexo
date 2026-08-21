@@ -45,6 +45,7 @@ use std::time::Instant;
 use zutreexo_accumulator::imt::DEFAULT_DEPTH;
 use zutreexo_accumulator::PoolId;
 use zutreexo_chain::{apply_block, load, save, summarize_block, ApplyOptions, ChainAccumulators};
+use zutreexo_testkit::measure::{peak_rss_mib, rss_mib};
 use zutreexo_testkit::source::{BlockSource, BlockStream, RpcSource};
 
 fn env_u32(key: &str, fallback: u32) -> u32 {
@@ -59,21 +60,6 @@ fn env_u64(key: &str, fallback: u64) -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(fallback)
-}
-
-/// Resident set size in MiB, read from `/proc`. Zero where unavailable.
-fn rss_mib() -> u64 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines().find(|l| l.starts_with("VmRSS:")).and_then(|l| {
-                l.split_whitespace()
-                    .nth(1)
-                    .and_then(|v| v.parse::<u64>().ok())
-            })
-        })
-        .map(|kb| kb / 1024)
-        .unwrap_or(0)
 }
 
 /// Recomputes one pool's root from scratch and compares it against the
@@ -118,6 +104,57 @@ enum RebuildOutcome {
     /// Above the affordable ceiling. This *is* a gap in coverage.
     TooLarge,
     NoTree,
+}
+
+/// Heights at which to write a snapshot, from `ZUTREEXO_SAVE_AT`.
+///
+/// Format: `height:path` pairs separated by commas, e.g.
+/// `1700000:/snap/h1.7m.bin,3455000:/snap/tip.bin`. A bare `height` writes to
+/// `zutreexo-<height>.snap` in the working directory.
+///
+/// Unparseable entries are reported and skipped rather than silently dropped:
+/// a typo that costs a seven-hour replay its snapshot should be visible in the
+/// first line of output, not discovered at the end.
+fn save_heights() -> std::collections::BTreeMap<u32, std::path::PathBuf> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(raw) = std::env::var("ZUTREEXO_SAVE_AT") else {
+        return out;
+    };
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let (height, path) = match entry.split_once(':') {
+            Some((h, p)) => (h.trim(), Some(p.trim())),
+            None => (entry, None),
+        };
+        match height.parse::<u32>() {
+            Ok(height) => {
+                let path = path.map_or_else(
+                    || std::path::PathBuf::from(format!("zutreexo-{height}.snap")),
+                    std::path::PathBuf::from,
+                );
+                out.insert(height, path);
+            }
+            Err(error) => eprintln!("ZUTREEXO_SAVE_AT: ignoring {entry:?}: {error}"),
+        }
+    }
+    out
+}
+
+/// Writes a snapshot and reports its size and cost.
+fn write_snapshot(
+    state: &ChainAccumulators,
+    path: &std::path::Path,
+) -> Result<(), zutreexo_chain::StoreError> {
+    let began = Instant::now();
+    save(state, path)?;
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    println!(
+        "\nsnapshot at tip {:?} -> {} — {:.2} GB in {:.1}s",
+        state.tip(),
+        path.display(),
+        size as f64 / 1e9,
+        began.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 fn main() -> std::process::ExitCode {
@@ -171,6 +208,7 @@ fn main() -> std::process::ExitCode {
     };
 
     let from = env_u32("ZUTREEXO_REPLAY_FROM", 0);
+    let save_at = save_heights();
     let to = env_u32("ZUTREEXO_REPLAY_TO", tip).min(tip);
     let depth =
         u8::try_from(env_u32("ZUTREEXO_DEPTH", u32::from(DEFAULT_DEPTH))).unwrap_or(DEFAULT_DEPTH);
@@ -183,20 +221,73 @@ fn main() -> std::process::ExitCode {
     // measurement; being killed is not.
     let max_rss = env_u64("ZUTREEXO_MAX_RSS_MIB", 38_000);
 
-    println!("node tip {tip}; replaying {from}..={to} at depth {depth}");
-    println!("cold rebuild while a pool holds under {rebuild_under} nullifiers");
-
-    let mut state = match ChainAccumulators::new(depth) {
-        Ok(state) => state,
-        Err(error) => {
-            eprintln!("cannot build accumulators at depth {depth}: {error}");
-            return std::process::ExitCode::FAILURE;
+    // Resume from a snapshot rather than replaying what has already been
+    // replayed. Phase 5b needs the same seven-hour pass to serve two different
+    // measurements taken at two different heights, and re-running it for each
+    // would cost a night per number.
+    //
+    // The resumed tip overrides `ZUTREEXO_REPLAY_FROM`: continuing from
+    // anywhere but tip+1 would either skip blocks or re-apply them, and
+    // re-applying is not merely wasteful — the IMT rejects a duplicate
+    // nullifier, so it fails loudly, which is the correct behaviour and still
+    // a wasted run.
+    let (mut state, from) = match std::env::var("ZUTREEXO_RESUME") {
+        Ok(path) => {
+            let path = std::path::PathBuf::from(path);
+            let began = Instant::now();
+            match load(&path) {
+                Ok(state) => {
+                    let resumed = state.tip().map_or(0, |tip| tip.saturating_add(1));
+                    println!(
+                        "resumed {} in {:.1}s — tip {:?}, {} unspent outputs, continuing from {resumed}",
+                        path.display(),
+                        began.elapsed().as_secs_f64(),
+                        state.tip(),
+                        state.counts().utxos,
+                    );
+                    if state.depth() != depth {
+                        eprintln!(
+                            "snapshot depth {} does not match requested depth {depth}",
+                            state.depth()
+                        );
+                        return std::process::ExitCode::FAILURE;
+                    }
+                    (state, resumed)
+                }
+                Err(error) => {
+                    eprintln!("resume from {} failed: {error}", path.display());
+                    return std::process::ExitCode::FAILURE;
+                }
+            }
         }
+        Err(_) => match ChainAccumulators::new(depth) {
+            Ok(state) => (state, from),
+            Err(error) => {
+                eprintln!("cannot build accumulators at depth {depth}: {error}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
     };
 
     // Genesis-forward, so every spend must resolve. That strictness is the
     // point: it is what makes the chain its own oracle.
     let options = ApplyOptions::default();
+
+    println!("node tip {tip}; replaying {from}..={to} at depth {depth}");
+    println!("cold rebuild while a pool holds under {rebuild_under} nullifiers");
+    if !save_at.is_empty() {
+        println!(
+            "mid-replay snapshots at {}",
+            save_at
+                .iter()
+                .map(|(h, p)| format!("{h} -> {}", p.display()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if from > to {
+        println!("nothing to do: resumed tip is already at or past {to}");
+    }
 
     let started = Instant::now();
     let mut applied = 0u64;
@@ -240,6 +331,21 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
         applied = applied.saturating_add(1);
+
+        // Snapshot mid-replay, so one pass can seed measurements taken at
+        // different heights. Written *after* the apply, so the snapshot's tip
+        // is this height and a resume continues at height + 1.
+        if let Some(path) = save_at.get(&height) {
+            match write_snapshot(&state, path) {
+                Ok(()) => {}
+                Err(error) => {
+                    // Not fatal. The replay is the expensive part and it is
+                    // still running correctly; losing a snapshot costs a
+                    // convenience, and aborting here would cost the night.
+                    eprintln!("\nsnapshot at {height} failed: {error}");
+                }
+            }
+        }
 
         if rss_mib() > max_rss && height % 1_000 == 0 {
             let counts = state.counts();
@@ -325,7 +431,13 @@ fn main() -> std::process::ExitCode {
         "wall clock          {:.1} min",
         elapsed.as_secs_f64() / 60.0
     );
-    println!("peak rss            {} MiB", rss_mib());
+    // `VmHWM`, not `VmRSS`. The previous line here read the *current* RSS and
+    // labelled it "peak", which is only the same number when the run happens to
+    // end at its high-water mark. It did not: the stage 2d table records 33.3
+    // GiB at height 2,700,000 against the 32.7 GiB this line reported at tip,
+    // so the published peak was understated by the run's own log.
+    println!("final rss           {} MiB", rss_mib());
+    println!("peak rss (VmHWM)    {} MiB", peak_rss_mib());
     println!("unspent outputs     {}", counts.utxos);
     for pool in PoolId::ALL {
         println!(

@@ -304,6 +304,30 @@ impl UtxoRoots {
         }
     }
 
+    /// Rebuilds a roots-only view from roots and a leaf counter.
+    ///
+    /// # This is a trust boundary, and it is the only one in this type
+    ///
+    /// Every other mutation carries a proof. This one does not: it exists so a
+    /// compact node can *bootstrap* from a state someone else computed, which
+    /// CLAUDE.md Phase 3 asks for — "a trusted-but-verifiable state at height
+    /// H, then validate forward". The verifiable half is the caller's job:
+    /// compare these roots against several independent bridges before adopting
+    /// them, exactly as `wire::Roots` describes.
+    ///
+    /// `leaves` is the total ever inserted, not the unspent count. Utreexo
+    /// assigns positions from that counter and never decrements it, so
+    /// supplying the unspent count instead would place every subsequent leaf at
+    /// the wrong position and fail on the first proof rather than silently.
+    pub fn from_parts(roots: &[Hash], leaves: u64) -> UtxoRoots {
+        UtxoRoots {
+            stump: Stump {
+                leaves,
+                roots: roots.iter().copied().map(ZcashNodeHash::new).collect(),
+            },
+        }
+    }
+
     /// The current roots, one per perfect tree in the forest.
     pub fn roots(&self) -> Vec<Hash> {
         self.stump
@@ -411,6 +435,17 @@ impl UtxoForest {
             .iter()
             .filter_map(|node| node.get_data().to_bytes())
             .collect()
+    }
+
+    /// Total leaves ever added, including spent ones.
+    ///
+    /// Mirrors [`UtxoRoots::leaves`], and the two must agree for a compact node
+    /// seeded from a full forest to verify anything: Utreexo derives positions
+    /// from this counter, so a compact node given the *unspent* count instead
+    /// would place every later leaf wrongly. Exposing it is what makes
+    /// [`UtxoRoots::from_parts`] usable from a bridge.
+    pub fn leaves(&self) -> u64 {
+        self.forest.leaves
     }
 
     /// Proves that `leaves` are in the accumulator.

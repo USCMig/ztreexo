@@ -55,3 +55,7 @@ fixtures/*.jsonl
 
 # Personal drafts and notes — not project deliverables.
 personal/
+
+# Phase 5b run logs. The measurements they produce are transcribed into
+# docs/benchmarks.md; the raw logs are machine- and night-specific.
+/phase5b-runs/

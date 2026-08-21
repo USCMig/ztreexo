@@ -39,9 +39,10 @@ use zebra_chain::serialization::ZcashDeserialize;
 use zutreexo_accumulator::imt::DEFAULT_DEPTH;
 use zutreexo_accumulator::{CanonicalSerialize, UtxoLeaf};
 use zutreexo_chain::{
-    apply_and_prove, summarize_block, ApplyOptions, BlockProofBundle, ChainAccumulators,
+    apply_and_prove, load, summarize_block, ApplyOptions, BlockProofBundle, ChainAccumulators,
 };
 use zutreexo_csn::CompactState;
+use zutreexo_testkit::measure::{peak_rss_mib, rss_mib, Latencies};
 use zutreexo_testkit::source::{BlockStream, RpcSource};
 
 fn env_u32(key: &str, fallback: u32) -> u32 {
@@ -74,6 +75,16 @@ struct Totals {
     imt_empty_siblings: u64,
     /// What the nullifier proofs would have cost before the sparse encoding.
     dense_insertion_bytes: u64,
+
+    /// Per-block cost of the two sides, kept as full samples.
+    ///
+    /// CLAUDE.md Phase 5 asks for p50 and p99, and stage 2d found a 165x spread
+    /// across mainnet history with the slow end concentrated in one window. A
+    /// mean would hide precisely the case a node has to survive.
+    bridge_latency: Latencies,
+    csn_latency: Latencies,
+    /// Encode plus decode, which a real client pays and the bridge does not.
+    codec_latency: Latencies,
 }
 
 /// The empty-subtree hash at each level, for one pool.
@@ -106,22 +117,95 @@ fn main() {
     println!("csn_replay: heights {start}..={end} against {address}, depth {depth}");
 
     let source = RpcSource::new(&address);
-    let mut bridge = match ChainAccumulators::new(depth) {
-        Ok(state) => state,
-        Err(error) => {
-            eprintln!("bad depth {depth}: {error}");
-            std::process::exit(2);
+    let mut totals = Totals::default();
+
+    // Resume the bridge from a snapshot, and seed the compact node from the
+    // bridge's roots at that height.
+    //
+    // # Why the compact node may be seeded
+    //
+    // Measuring a compact node over the sandblasting window needs a *real*
+    // transparent forest at height 1.7M, because that is where the expensive
+    // deletions are. Replaying to there with proof generation costs most of a
+    // day; replaying without it costs hours and can be done once. So the bridge
+    // is restored from a snapshot and the compact node starts from the roots
+    // that snapshot implies.
+    //
+    // This does not weaken what the run checks. Everything after the seed is
+    // verified proof by proof, and the two sides are compared after every
+    // block, so a wrong seed shows up on the first block rather than never —
+    // the same argument `CompactState::from_roots` documents.
+    let (mut bridge, mut csn, start) = match std::env::var("ZUTREEXO_RESUME") {
+        Ok(path) => {
+            let path = std::path::PathBuf::from(path);
+            let began = Instant::now();
+            let bridge = match load(&path) {
+                Ok(state) => state,
+                Err(error) => {
+                    eprintln!("resume from {} failed: {error}", path.display());
+                    std::process::exit(2);
+                }
+            };
+            if bridge.depth() != depth {
+                eprintln!(
+                    "snapshot depth {} does not match requested depth {depth}",
+                    bridge.depth()
+                );
+                std::process::exit(2);
+            }
+            let seeded = CompactState::from_roots(
+                depth,
+                &bridge.utxo_roots(),
+                bridge.utxos().leaves(),
+                &bridge.imt_states(),
+                bridge.tip(),
+            );
+            let csn = match seeded {
+                Ok(state) => state,
+                Err(error) => {
+                    eprintln!("cannot seed the compact node: {error}");
+                    std::process::exit(2);
+                }
+            };
+            let resumed = bridge.tip().map_or(0, |tip| tip.saturating_add(1));
+            println!(
+                "resumed {} in {:.1}s — tip {:?}, {} unspent outputs, rss {} MiB",
+                path.display(),
+                began.elapsed().as_secs_f64(),
+                bridge.tip(),
+                bridge.counts().utxos,
+                rss_mib(),
+            );
+            // The seed is only worth anything if the two sides start equal.
+            // Checking costs nothing and turns a silent mis-seed into a line.
+            if csn.utxo_roots() != bridge.utxo_roots()
+                || csn.nullifier_roots() != bridge.nullifier_roots()
+            {
+                eprintln!("the seeded compact node does not match the snapshot it came from");
+                std::process::exit(1);
+            }
+            println!("compact node seeded from those roots, continuing at {resumed}");
+            (bridge, csn, resumed.max(start))
         }
-    };
-    let mut csn = match CompactState::new(depth) {
-        Ok(state) => state,
-        Err(error) => {
-            eprintln!("bad depth {depth}: {error}");
-            std::process::exit(2);
+        Err(_) => {
+            let bridge = match ChainAccumulators::new(depth) {
+                Ok(state) => state,
+                Err(error) => {
+                    eprintln!("bad depth {depth}: {error}");
+                    std::process::exit(2);
+                }
+            };
+            let csn = match CompactState::new(depth) {
+                Ok(state) => state,
+                Err(error) => {
+                    eprintln!("bad depth {depth}: {error}");
+                    std::process::exit(2);
+                }
+            };
+            (bridge, csn, start)
         }
     };
 
-    let mut totals = Totals::default();
     let began = Instant::now();
 
     for (height, fetched) in BlockStream::new(&source, start, end, 256, 8) {
@@ -159,7 +243,16 @@ fn main() {
             None
         };
 
-        let (_, bundle) = match apply_and_prove(&mut bridge, &summary, ApplyOptions::default()) {
+        // Timed separately, because they are paid by different parties: the
+        // bridge pays for state and proof construction, the compact node pays
+        // only for verification, and the codec is paid by whoever is on the
+        // wire. Reporting one combined figure would obscure which side the
+        // design actually makes cheaper, which is the whole question.
+        let began_bridge = Instant::now();
+        let applied = apply_and_prove(&mut bridge, &summary, ApplyOptions::default());
+        totals.bridge_latency.record(began_bridge.elapsed());
+
+        let (_, bundle) = match applied {
             Ok(pair) => pair,
             Err(error) => {
                 eprintln!("height {height}: bridge failed: {error}");
@@ -168,8 +261,12 @@ fn main() {
         };
 
         // Through the wire encoding, as a real client would receive it.
+        let began_codec = Instant::now();
         let encoded = bundle.to_bytes();
-        let received = match BlockProofBundle::from_bytes(&encoded) {
+        let decoded = BlockProofBundle::from_bytes(&encoded);
+        totals.codec_latency.record(began_codec.elapsed());
+
+        let received = match decoded {
             Ok(bundle) => bundle,
             Err(error) => {
                 eprintln!("height {height}: bundle would not decode: {error}");
@@ -177,7 +274,11 @@ fn main() {
             }
         };
 
-        if let Err(error) = csn.apply_bundle(&summary, &received) {
+        let began_csn = Instant::now();
+        let verified = csn.apply_bundle(&summary, &received);
+        totals.csn_latency.record(began_csn.elapsed());
+
+        if let Err(error) = verified {
             eprintln!("height {height}: compact node rejected the block: {error}");
             std::process::exit(1);
         }
@@ -341,6 +442,37 @@ fn report(totals: &Totals, height: u32, elapsed: f64, final_report: bool) {
                     - totals.insertion_bytes as f64 / totals.dense_insertion_bytes.max(1) as f64)
         );
     }
+
+    // CLAUDE.md Phase 5: "per-block validation latency (p50/p99)". Reported as
+    // quantiles rather than a mean because stage 2d measured a 165x spread over
+    // mainnet history and concluded a mean would understate the p99 "by more
+    // than two orders of magnitude".
+    println!();
+    println!("per-block latency:");
+    for (label, latencies) in [
+        ("bridge apply+prove", &totals.bridge_latency),
+        ("bundle encode+decode", &totals.codec_latency),
+        ("compact node verify", &totals.csn_latency),
+    ] {
+        match latencies.summary() {
+            Some(summary) => println!("  {label:<21} {summary}"),
+            None => println!("  {label:<21} no samples"),
+        }
+    }
+    if let (Some(bridge), Some(csn)) = (
+        totals.bridge_latency.summary(),
+        totals.csn_latency.summary(),
+    ) {
+        // The ratio is the point of the whole design, so it is computed rather
+        // than left to the reader.
+        println!(
+            "  compact node is {:.1}x cheaper than the bridge at p50, {:.1}x at p99",
+            bridge.p50_micros as f64 / csn.p50_micros.max(1) as f64,
+            bridge.p99_micros as f64 / csn.p99_micros.max(1) as f64,
+        );
+    }
+    println!();
+    println!("peak rss (VmHWM)    {} MiB", peak_rss_mib());
 
     if totals.batchable_blocks > 0 {
         let saving =

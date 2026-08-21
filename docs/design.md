@@ -821,6 +821,82 @@ reopen the hole on a byte the sweep does not happen to hit.
 
 ---
 
+## D30 — The shadow node is external to Zebra, not a flag inside it
+
+**Phase 5b.** A deliberate departure from the wording of CLAUDE.md Phase 5, and
+one that narrows what the phase can claim.
+
+Phase 5 asks to run the compact path *"behind a shadow-mode feature flag against
+a normal Zebra node: both validate every block, results compared, any
+disagreement is a hard failure and a loud log line. Never let the accumulator
+path gate consensus during this phase."*
+
+A feature flag *inside* Zebra means a patched `zebrad`, which means maintaining
+a fork of a consensus node for the duration of the project. That is a larger
+undertaking than the rest of Phase 5 combined, and it buys less than it appears
+to, because the thing being compared — accumulator roots — is something Zebra
+does not compute at all. Being inside the process would not create an oracle
+that does not exist; it would only remove an RPC hop.
+
+So `crates/zutreexo-testkit/src/bin/shadow.rs` observes an unmodified `zebrad`
+over its JSON-RPC. The never-gate-consensus requirement is met trivially and
+uninterestingly: the process cannot influence what Zebra accepts, because Zebra
+does not know it is there.
+
+**What is honestly gained over the historical replays**, and it is not nothing:
+
+* **Real reorgs.** `tests/reorg_fuzz.rs` ran 10⁶ reorgs, every one of our own
+  construction on chains we generated. Until now the rollback path had never met
+  one it did not design.
+* **Blocks nobody chose.** The fixture slices were selected for being
+  interesting. Tip blocks are whatever miners produce.
+* **The parse oracle continuously.** The committed checkpoints cover four
+  200-block slices; the shadow run compares `getblock` verbosity 2 counts
+  against our extractor on *every* block, field for field with
+  `scripts/capture_checkpoints.py`.
+
+**What is not claimed:** that a compact node reaches the same accept/reject
+decision as Zebra on a block. It does not and cannot — it validates strictly
+less (no signatures, no consensus rules, no shielded proof verification). What
+is compared is the accumulator state transition, between our own full and
+compact implementations, with Zebra oracling the parse underneath both.
+
+---
+
+## D31 — Reorg recovery is a queue for a compact node and a reload for a full one
+
+**Phase 5b.** Discovered while building the shadow runner, and it is an argument
+in the design's favour that had not previously been made.
+
+The obvious way to unwind the bridge at tip was `RollbackJournal`, built in
+stage 2c. Measured, it is the wrong tool there: `record` snapshots the forest
+*and* clones the whole outpoint index, and a smoke run at height 2,000 grew
+**14 MiB per block** doing it. At tip that index holds 27.5M entries at roughly
+550 bytes each, so one retained snapshot is on the order of 15 GiB on top of the
+33 GiB the state already occupies — more than the measurement machine has, for a
+path that may never fire.
+
+The shadow runner therefore unwinds the bridge by reloading its on-disk snapshot
+and replaying the common prefix. Heights at or below a fork point are unchanged
+by definition, so refetching them is safe. Cost: a ~21 s load plus replay at
+~1,500 blk/s, paid only when a reorg happens.
+
+**The compact node's equivalent is taking an older state off a queue.** Its
+entire state is a few hundred bytes, so retaining hundreds of historical states
+costs a few hundred kilobytes. Utreexo deletion is not invertible
+([D18](#d18--rollback-is-delta-based-for-nullifiers-and-snapshot-based-for-the-forest))
+and that is precisely why a full node needs undo data — but a node that holds
+only roots does not need to invert anything, because it can afford to keep every
+root it has ever had.
+
+So the asymmetry is not a detail of this harness. A full node's reorg cost
+scales with the state; a compact node's scales with the reorg depth, at a few
+hundred bytes per block, and Zcash's reorg limit is 100 blocks. This belongs
+alongside the storage figures when the narrow-or-keep decision is taken, and it
+applies to the *nullifier* side as much as the transparent one.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage
