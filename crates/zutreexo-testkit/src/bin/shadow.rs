@@ -271,9 +271,20 @@ fn main() -> std::process::ExitCode {
     let mut deepest_reorg = 0u32;
     let started = Instant::now();
 
-    println!("\nshadowing tip for {want} blocks, polling every {poll}s\n");
+    println!("\nfollowing tip for {want} blocks (catch-up not counted), polling every {poll}s\n");
 
-    while validated < want {
+    // **Counted in blocks followed at tip, not blocks validated.**
+    //
+    // A run resumed from a snapshot taken hours earlier starts well behind —
+    // roughly 390 blocks after a seven-hour replay, at Zcash's 75 s spacing.
+    // Counting those toward the target would spend most of the budget on
+    // history the node had already settled, and settled history cannot expose
+    // a reorg, which is most of the reason to follow the tip at all.
+    //
+    // Catch-up blocks are still applied, still compared against the bridge and
+    // against zebrad's parse, and still reported. They are simply not what the
+    // run is measured in.
+    while followed < want {
         let our_tip = bridge.tip();
         let node_tip = match source.tip() {
             Ok(tip) => tip,
@@ -451,7 +462,7 @@ fn main() -> std::process::ExitCode {
         let state_bytes = csn.to_bytes().len();
 
         println!(
-            "h={next} {} txs={} spends={} nul={} bundle={}B csn_state={}B rss={}MiB [{validated}/{want}]",
+            "h={next} {} txs={} spends={} nul={} bundle={}B csn_state={}B rss={}MiB [{followed}/{want} at tip]",
             &hash[..16.min(hash.len())],
             summary.transactions,
             summary.transparent_spends.len(),
@@ -482,8 +493,11 @@ fn main() -> std::process::ExitCode {
     let history_bytes: usize = history.iter().map(|a| a.csn.to_bytes().len()).sum();
 
     println!("\n--- shadow run complete ---");
-    println!("blocks validated    {validated}");
-    println!("  of which at tip    {followed}  (the rest were catch-up, which cannot see a reorg)");
+    println!("blocks followed     {followed}  (at tip, waited for)");
+    println!(
+        "blocks validated    {validated}  (including {} of catch-up)",
+        validated.saturating_sub(followed)
+    );
     println!("wall clock          {:.1} min", elapsed / 60.0);
     println!("reorgs handled      {reorgs}");
     if reorgs > 0 {
