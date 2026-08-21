@@ -34,12 +34,12 @@ infrastructure, `fix/<topic>` for defects.
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
-| 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, peak 32.7 GiB |
+| 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, RSS at tip 32.7 GiB (the run's own table shows 33.3 GiB earlier; the binary was printing current RSS labelled "peak" and now reads `VmHWM`) |
 | 3 | Persistence, snapshots, crash consistency | `phase-3-persistence` | **complete** — DoD met: 25 SIGKILLs mid-save, store intact every time, with a non-atomic control proving the harness detects corruption. Merged `main` 2026-08-20; the merge's coverage run found three snapshot tests passing for the wrong reason ([D24](docs/design.md)) |
 | 4a | Proof bundle + compact state node verification core | `phase-4a-bundle` | **complete** — a roots-only node tracks the bridge byte-for-byte over real mainnet blocks; bandwidth measured and it is unflattering ([`docs/benchmarks.md`](docs/benchmarks.md)) |
 | 4b | Sparse wire format, bridge service, served IBD | `phase-4a-bundle` | **complete** — Phase 4 DoD met over a real socket; sparse paths cut wallet proofs 53.2% and bundle overhead 170.5% to 152.6%. Not gRPC ([D27](docs/design.md)) |
 | 5a | Headline measurement: nullifier-check cost vs gap length | `phase-4a-bundle` | **complete** — the claim holds decisively for spend-status queries (317x to 31,705x at a year's gap) and barely at all for full sync (<=14.7% of bytes, 0% of trial decryption) |
-| 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | — | not started |
+| 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | `phase-5b-shadow` | **machinery built, measurements running** — compact state has a codec and a byte count at last; shadow follows live tip with zebrad oracling the parse every block. Two decisions recorded: the shadow is external to Zebra ([D30](docs/design.md)) and compact-node reorg recovery is a queue rather than undo data ([D31](docs/design.md)) |
 | 6 | Fuzzing, DoS analysis, privacy review | — | not started |
 | 7 | ZIP draft — gated on 5 and 6 | — | not started |
 
@@ -55,6 +55,31 @@ on a 141 GB allocation. The assumption that D13 was purely an upstream problem
 to wait out was wrong: the wrapper written to contain it did not. Every decoder
 added from here should get a bit-flip and truncation sweep at the time it is
 written, not at Phase 6.
+
+**The shadow runner's fork detection is untested in anger.** The compact-node
+half of the reorg claim *is* tested — `crates/zutreexo-csn/tests/reorg.rs`
+covers restoring a kept state and, the load-bearing half, that a restored node
+applying a divergent chain ends **byte-identical** to a cold replay of the final
+chain, with both blindness checks confirmed firing. What is untested is
+`shadow.rs`'s own `unwind`: walking history against the node's block hashes,
+finding the fork, reloading the bridge snapshot and replaying the common prefix.
+That needs a node that actually reorgs, and mainnet supplies those on its own
+schedule — a 500-block run is roughly ten hours and may well see none.
+
+The failure mode is at least safe rather than silent: every path in `unwind`
+returns an error that ends the run with a named reason, and the roots are
+re-compared byte-for-byte after unwinding, so a wrong rewind aborts rather than
+carrying on. But "safe when it fails" is not "known to work", and the run's
+summary distinguishes blocks followed at tip from catch-up blocks precisely
+because only the former can expose one.
+
+**A full node's reorg data does not fit at tip, which is itself a finding.**
+`RollbackJournal` was built in stage 2c and is the wrong tool at mainnet tip:
+`record` clones the whole outpoint index, measured at **14 MiB per block** in a
+smoke run, which extrapolates to ~15 GiB for one retained snapshot against 27.5M
+outputs. The shadow runner reloads and replays instead. See
+[D31](docs/design.md) — the asymmetry with the compact node's few hundred bytes
+is an argument for the design, not merely a harness detail.
 
 **The evidence for dropping the transparent forest is now three-deep.** Phase 0
 found 27.5M transparent outputs at tip, not the small set expected; Phase 4a/4b
