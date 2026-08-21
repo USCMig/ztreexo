@@ -384,9 +384,23 @@ fn report(totals: &Totals, height: u32, elapsed: f64, final_report: bool) {
 
     if !final_report {
         println!(
-            "  h={height:>8}  {:.0} blk/s  bundle {:>6} B/blk  overhead {overhead:>5.1}%",
+            "  h={height:>8}  {:.0} blk/s  bundle {:>6} B/blk  overhead {overhead:>5.1}%  \
+             bridge {}  csn {}",
             blocks as f64 / elapsed.max(1e-9),
             totals.bundle_bytes / blocks,
+            // Cumulative, so the numbers move as the run enters the
+            // sandblasting ramp rather than only being visible at the end.
+            // Stage 2d measured a 165x throughput swing across mainnet, and a
+            // single figure for the whole window would average the interesting
+            // part away — which is precisely what it warned against.
+            totals
+                .bridge_latency
+                .summary()
+                .map_or_else(|| "-".to_owned(), |s| format!("{s}")),
+            totals
+                .csn_latency
+                .summary()
+                .map_or_else(|| "-".to_owned(), |s| format!("{s}")),
         );
         return;
     }

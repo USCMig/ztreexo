@@ -9,9 +9,14 @@
 #
 #   1. genesis -> tip, no proofs, snapshotting at 1,700,000 and at tip.
 #      This is the expensive pass and it is done once. ~7 h.
-#   2. compact-node lockstep across the sandblasting window, resumed from the
-#      1.7M snapshot so the transparent forest is real. Stage 2d measured 9
-#      blk/s here against 1,568 at tip, so this is where the p99 lives. ~1 h.
+#   2. compact-node lockstep across the sandblasting ramp, resumed from the
+#      1.7M snapshot so the transparent forest is real. Stage 2d reported 9
+#      blk/s for the interval ending at 1,800,000 against 1,507 for the one
+#      ending at 1,700,000 — the rate column is per preceding interval, so the
+#      collapse is inside 1.7M-1.8M and starts just after the snapshot. The
+#      window is 60,000 blocks rather than 10,000 so the distribution is
+#      sampled across the ramp instead of at one guessed point, and csn_replay
+#      prints running quantiles so the movement is visible. ~1 h.
 #   3. shadow the live tip from the tip snapshot. ~10 h for 500 blocks at
 #      Zcash's 75 s target spacing.
 #
@@ -29,7 +34,7 @@ OUT_DIR="${ZUTREEXO_OUT_DIR:-$REPO/phase5b-runs}"
 RPC="${ZUTREEXO_RPC:-127.0.0.1:8232}"
 
 SANDBLAST_FROM=1700000
-SANDBLAST_TO=1710000
+SANDBLAST_TO=1760000
 SHADOW_BLOCKS="${ZUTREEXO_SHADOW_BLOCKS:-500}"
 
 mkdir -p "$SNAP_DIR" "$OUT_DIR"
