@@ -69,6 +69,7 @@ use zutreexo_chain::{
 };
 use zutreexo_csn::CompactState;
 use zutreexo_testkit::measure::{peak_rss_mib, rss_mib, Latencies};
+use zutreexo_testkit::shadow::{find_fork, AppliedBlock, Fork};
 use zutreexo_testkit::source::{BlockSource, RpcSource};
 
 /// One block this run applied, and the compact state it produced.
@@ -539,25 +540,36 @@ fn unwind(
     csn: &mut CompactState,
     history: &mut VecDeque<Applied>,
 ) -> Result<u32, String> {
-    let mut undone = 0u32;
+    // Fork detection is `zutreexo_testkit::shadow::find_fork`, which is a pure
+    // walk over the history and is tested in `tests/shadow_fork.rs`. Keeping a
+    // second copy of it here would leave the tested one decorative.
+    let mut marks: VecDeque<AppliedBlock> = history
+        .iter()
+        .map(|a| AppliedBlock {
+            height: a.height,
+            hash: a.hash.clone(),
+        })
+        .collect();
+    let fork = find_fork(&mut marks, |height| {
+        source
+            .block_hash(height)
+            .map_err(|e| format!("hash query at {height}: {e}"))
+    })?;
 
-    // Find the deepest height whose hash the node still agrees with.
-    while let Some(applied) = history.back() {
-        let current = source
-            .block_hash(applied.height)
-            .map_err(|e| format!("hash query at {}: {e}", applied.height))?;
-        if current == applied.hash {
-            break;
+    let (target, undone) = match fork {
+        Fork::None => return Ok(0),
+        Fork::BeyondHistory { undone } => {
+            return Err(format!(
+                "unwound {undone} block(s) and ran out of history; the fork predates this run"
+            ))
         }
-        history.pop_back();
-        undone = undone.saturating_add(1);
-    }
-
-    let Some(target) = history.back().map(|a| a.height) else {
-        return Err(format!(
-            "unwound {undone} block(s) and ran out of history; the fork predates this run"
-        ));
+        Fork::UnwindTo { target, undone } => (target, undone),
     };
+    // Bring the real history (which carries the compact states) into line with
+    // what the search decided.
+    while history.back().is_some_and(|a| a.height > target) {
+        history.pop_back();
+    }
 
     // ---- the bridge: reload, then replay the common prefix ----
     let began = Instant::now();

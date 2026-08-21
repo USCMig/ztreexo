@@ -29,6 +29,7 @@ pub mod harness;
 pub mod measure;
 pub mod naive;
 pub mod reorg;
+pub mod shadow;
 pub mod source;
 pub mod state;
 pub mod vectors;

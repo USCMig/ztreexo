@@ -56,22 +56,29 @@ to wait out was wrong: the wrapper written to contain it did not. Every decoder
 added from here should get a bit-flip and truncation sweep at the time it is
 written, not at Phase 6.
 
-**The shadow runner's fork detection is untested in anger.** The compact-node
-half of the reorg claim *is* tested — `crates/zutreexo-csn/tests/reorg.rs`
-covers restoring a kept state and, the load-bearing half, that a restored node
-applying a divergent chain ends **byte-identical** to a cold replay of the final
-chain, with both blindness checks confirmed firing. What is untested is
-`shadow.rs`'s own `unwind`: walking history against the node's block hashes,
-finding the fork, reloading the bridge snapshot and replaying the common prefix.
-That needs a node that actually reorgs, and mainnet supplies those on its own
-schedule — a 500-block run is roughly ten hours and may well see none.
+**Reorg handling is tested in three of its four parts.** Taken separately,
+because they need different things to test them:
 
-The failure mode is at least safe rather than silent: every path in `unwind`
-returns an error that ends the run with a named reason, and the roots are
-re-compared byte-for-byte after unwinding, so a wrong rewind aborts rather than
-carrying on. But "safe when it fails" is not "known to work", and the run's
-summary distinguishes blocks followed at tip from catch-up blocks precisely
-because only the former can expose one.
+| part | covered by | needs a real reorg? |
+|---|---|---|
+| compact node restores a kept state and stays byte-identical to a cold replay | `zutreexo-csn/tests/reorg.rs` | no |
+| deciding *where* to unwind to | `zutreexo-testkit/tests/shadow_fork.rs` | no |
+| reload the bridge snapshot, replay the common prefix | `load` + `apply_block`, covered elsewhere | no |
+| the three composed, against a chain that actually forked | — | **yes** |
+
+`shadow.rs` calls `shadow::find_fork` rather than keeping its own copy, so the
+tested walk is the one that runs. The `reorg.rs` invariant is CLAUDE.md Phase
+2's unsoftened: apply branch A, restore to the fork, apply divergent branch B,
+end **byte-identical** to a node that only ever saw the final chain — with both
+blindness checks confirmed firing.
+
+What remains untested is the composition, which needs mainnet to reorg on its
+own schedule; a 500-block run is roughly ten hours and may see none. The
+failure mode is safe rather than silent — every path in `unwind` ends the run
+with a named reason, and roots are re-compared byte-for-byte after rewinding —
+but "safe when it fails" is not "known to work", and the run summary separates
+blocks followed at tip from catch-up blocks because only the former can expose
+one.
 
 **A full node's reorg data does not fit at tip, which is itself a finding.**
 `RollbackJournal` was built in stage 2c and is the wrong tool at mainnet tip:
