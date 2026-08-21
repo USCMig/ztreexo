@@ -38,8 +38,8 @@ pub mod utreexo;
 
 pub use hash::{Hash, HASH_LEN};
 pub use imt::{
-    ImtError, ImtState, IndexedMerkleTree, InsertionProof, Leaf, NonMembershipProof, Value,
-    DEFAULT_DEPTH, MAX_DEPTH, MIN_DEPTH,
+    empty_subtree_hashes, ImtError, ImtState, IndexedMerkleTree, InsertionProof, Leaf,
+    NonMembershipProof, Value, DEFAULT_DEPTH, MAX_DEPTH, MIN_DEPTH,
 };
 pub use pool::PoolId;
 pub use proof::{CanonicalSerialize, NullifierProofBundle, ProofCodecError, PROOF_FORMAT_VERSION};

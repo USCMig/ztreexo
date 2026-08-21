@@ -651,6 +651,176 @@ accept a wrong transition.
 
 ---
 
+## D27 — The bridge speaks binary over HTTP, not gRPC
+
+**Phase 4b.** A deliberate departure from CLAUDE.md §4, which says to expose
+these methods through Zaino "otherwise as a standalone sidecar with the same
+transport" — Zaino speaks gRPC, so that reads as protobuf.
+
+Everything the bridge serves already has a canonical binary encoding, built in
+Phase 4a and made sparse in D28. Wrapping those bytes in protobuf puts one
+length-delimited framing inside another and buys nothing, while adding
+`tonic`/`prost` and their transitive tree to a dependency policy that has stayed
+deliberately narrow. So the transport is HTTP/1.1 with
+`application/octet-stream` bodies: a one-byte method tag in, a one-byte status
+plus payload out.
+
+Not base64 or hex, which would have been the easy way to reuse the existing
+JSON-RPC client shape. Hex doubles the payload and base64 adds a third, and the
+whole point of Phase 4a's measurements is what these bundles cost on the wire.
+An encoding that inflates them by a third would corrupt the numbers this project
+exists to produce.
+
+The codec is kept in `wire.rs`, separate from the socket handling, precisely so
+a Zaino adapter is a shim over the same bytes rather than a reimplementation. If
+the maintainers are receptive, that shim is the integration.
+
+**`GetUtxoInclusionProofs(outpoints)` is not implemented**, though CLAUDE.md
+lists it. Every caller identified so far wants the inclusion proofs *for a
+block*, which the bundle already batches — and Phase 4a measured batching at an
+85.4% saving over proving inputs individually. A per-outpoint method invites
+exactly the access pattern that measurement says to avoid, and it is a
+denial-of-service lever for Phase 6 besides. It can be added when something
+needs it.
+
+### The bridge cannot be multi-threaded as it stands
+
+Found while writing the definition-of-done test: **`ChainAccumulators` is not
+`Send`.** `rustreexo`'s `MemForest` is a `Vec<Rc<Node>>` plus a
+`HashMap<_, Weak<Node>>`, with each node's hash in a `Cell` — the same structure
+behind the clone-aliasing defect in D11 (mit-dci/rustreexo#151).
+
+So the state cannot be moved to a worker thread, and the server runs on the
+thread that owns it. That is fine for a loopback sidecar and it is what the test
+does, but it constrains any real deployment: concurrency has to come from
+owning the state on one thread and passing requests to it over a channel, not
+from sharing it behind a lock. Worth knowing before anyone designs the
+production topology.
+
+The server also has no TLS, no authentication, no rate limiting, and no
+proof-size caps. **Bind it to loopback.** A peer requesting proofs for every
+UTXO is the explicit Phase 6 denial-of-service concern and none of that analysis
+has been done.
+
+### Retention is the real limit on the Phase 4 definition of done
+
+A bundle's inclusion proof is only valid against the accumulator as it stood
+before its block, and Utreexo deletion is not invertible (D18), so a proof
+cannot be regenerated once later blocks land. A bridge that will be asked for
+height `H` has to have kept `H`'s bundle.
+
+`Bridge::keep` bounds that, because keeping every bundle is keeping the chain a
+second time. The definition of done — "a CSN can complete IBD to tip using only
+headers + blocks + bridge-served proofs" — therefore holds *only for a bridge
+retaining every bundle a client will request*, which for a genesis-forward sync
+means all of them. A client asking for an evicted height is told
+`NO_SUCH_HEIGHT` and has to sync from a snapshot or a bridge with a longer
+window. That is a real operational cost of the design and it is not hidden
+behind a hang or a corrupt answer.
+
+---
+
+## D28 — Sparse proof paths: omit the siblings both sides can derive
+
+**Phase 4b.** Wire format change, `PROOF_FORMAT_VERSION` 1 to 2. Taken now
+rather than later because Phase 4b gives the format its first clients, and
+after that it is frozen.
+
+A depth-40 indexed Merkle tree holding a few million nullifiers is
+overwhelmingly empty: above roughly `log2(leaf_count)` every sibling on a path
+is the canonical hash of an empty subtree at that level, which both encoder and
+decoder can derive from the pool's domain separator. Phase 4a measured 71.4% of
+sibling hashes to be exactly that.
+
+The encoding replaces the dense path with a length byte, a presence bitmap of
+one bit per level, and only the siblings whose bit is set. `empty_subtree_hashes`
+is public so both sides build the identical ladder.
+
+Measured, not projected:
+
+| | dense | sparse | saved |
+|---|---|---|---|
+| wallet non-membership proof, depth 40 | 1,362 B | 637 B | **53.2%** |
+| nullifier proofs in a block bundle (heights 0–20,000) | 186,943,218 B | 58,698,488 B | **68.6%** |
+| compact-node proof overhead (heights 0–20,000) | 101.3% | 73.1% | — |
+
+**A lying bitmap cannot forge acceptance.** A hostile bridge can clear a bit for
+a sibling that is not empty; the decoder then substitutes the empty hash, the
+verifier folds the path, and the computed root does not match the trusted one,
+so the proof is rejected. The bitmap is not a trusted channel — it can only
+produce a proof that fails, which is the same guarantee the dense encoding
+gives against a corrupted sibling. Tested directly rather than argued.
+
+The pool is now carried explicitly, in `NonMembershipResponse` and in the block
+bundle. It has to be: the omitted hashes are domain-separated per pool, so a
+decoder cannot rebuild them without knowing the tree. That also makes a proof
+moved between pools a decode-time error naming the mistake, rather than a root
+mismatch several layers down — the reasoning already applied to
+`NullifierProofBundle`.
+
+The depth is carried for the same reason, once per bundle rather than per proof.
+A verifier whose depth disagrees fails on the first proof instead of computing a
+wrong root.
+
+---
+
+## D29 — A length guard that only checked one direction
+
+**Phase 4b.** A denial-of-service hole in our own decoder, found by a bit-flip
+sweep written for coverage rather than for security.
+
+`decode_utxo_proof` wraps `rustreexo`'s proof parser, which allocates from a
+length prefix before checking it against the input (D13, reported upstream,
+still open). `validate_utxo_proof_header` exists to guard that. It checked:
+
+```rust
+if hashes_bytes < reader.remaining() { return Err(...); }
+```
+
+which rejects a header declaring *fewer* hashes than the bytes present. It never
+checked the other direction. A header declaring **more** hashes than could
+possibly be there passed straight through into `Proof::deserialize` and its
+`with_capacity`.
+
+`bundle_codec.rs`'s bit-flip test found it immediately: one flipped bit set the
+count to 2^32+1, and 2^32+1 × 33 bytes is 141,733,920,801 — the test process
+aborted on the allocation.
+
+**The comment above the check asserted the opposite of what the code did.** It
+read: *"a header claiming a billion hashes in forty bytes is rejected before
+anything is allocated."* That is precisely the case that was accepted. This is
+the fourth time on this project that prose has described a check the code did
+not perform (D17, D21, D24), and the second time the false statement was written
+by the same hand as the code it described.
+
+The fix is a lower bound before the upper one. Every hash entry costs at least
+one byte under the tagged encoding — a bare tag for `Empty` or `Placeholder` —
+so a declared count exceeding the remaining bytes is unsatisfiable whatever
+those bytes contain:
+
+```rust
+if hashes_len > reader.remaining() { return Err(DeclaredLengthExceedsInput { .. }); }
+```
+
+Two things worth carrying forward.
+
+**A bounded outer length does not bound an inner decoder.** The bundle decoder
+already read the proof as a length-prefixed byte string, correctly bounded
+against the bytes remaining. That guarantees the *slice* is small; it says
+nothing about what a nested parser will do with a length prefix *inside* the
+slice. Every layer that hands bytes to another parser needs its own bound.
+
+**This is Phase 6 arriving early and unannounced.** CLAUDE.md schedules
+deserialisation fuzzing for Phase 6, and the reasoning had been that D13 is an
+upstream problem to be waited out. It is not only upstream: the wrapper written
+to contain it did not. A three-line bit-flip loop in a test written to raise a
+coverage number found in seconds what the schedule had deferred by two phases.
+`tests/utxo_proof_header.rs` pins the vector as a named seed, because the sweep
+that found it is randomised over bit positions and a future refactor could
+reopen the hole on a byte the sweep does not happen to hit.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage

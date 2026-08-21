@@ -704,3 +704,71 @@ every crossover above: a 100-note wallet would break even at roughly 585 blocks
 instead of 1,262. Unlike the Phase 4a case — where the compressible term was
 only 16.4% of the bundle and the Utreexo proofs dominated — here the proof *is*
 the whole cost, so the optimisation is worth its full 53.7%.
+
+---
+
+## Phase 4b — sparse proof paths, re-measured, 2026-08-20
+
+`docs/design.md` D28 changed the wire format: sibling hashes that are the
+canonical empty-subtree value for their level are replaced by a cleared bit in
+a presence bitmap and rebuilt by the decoder. Phase 4a projected the saving from
+a byte census; these are the measurements.
+
+### The wallet proof — where it matters most
+
+| | bytes |
+|---|---|
+| dense (Phase 4a) | 1,362 |
+| **sparse (now)** | **637** |
+| saved | **53.2%** |
+
+Projected at 631; the extra six bytes are the pool, depth and height the
+response now carries explicitly. This halves every crossover in the Phase 5a
+table: a 100-note wallet breaks even against scanning at roughly 590 blocks
+instead of 1,262.
+
+### The compact-node bundle — heights 0–150,000
+
+| | Phase 4a | Phase 4b |
+|---|---|---|
+| bundle bytes | 7,248,205,320 | 6,485,997,123 |
+| **proof overhead** | **170.5%** | **152.6%** |
+| nullifier proofs | 1,192,149,398 | 431,589,992 (**63.8%** saved) |
+
+66.4% of sibling hashes over this range were derivable — 764,606,688 bytes
+never sent.
+
+### The composition moved, and that is the finding
+
+| component | Phase 4a | Phase 4b |
+|---|---|---|
+| **Utreexo inclusion proofs** | 65.3% | **73.0%** |
+| spent leaf contents | 18.2% | 20.3% |
+| nullifier proofs | 16.4% | **6.7%** |
+
+The nullifier side is now nearly free — 6.7% of the bundle — and the transparent
+side is 93.3% of it. Compressing the shielded half worked and moved the problem
+without shrinking it much: overhead fell by 18 points and remains six times
+Bitcoin's Utreexo figure.
+
+**So the transparent forest is where the remaining cost lives, and there is no
+equivalent trick available for it.** The empty-subtree compression works because
+an indexed Merkle tree at depth 40 is mostly empty and its filler is derivable.
+A Utreexo forest is dense by construction — that is the whole point of the
+forest-of-perfect-trees design — so its proofs carry no derivable filler to
+remove. Any further reduction has to come from `rustreexo`'s proof encoding or
+from not serving transparent proofs at all.
+
+CLAUDE.md Phase 5 anticipates that conclusion: *"If the measurements say that,
+narrow the project to the nullifier accumulator and drop the transparent forest
+rather than shipping both out of sunk cost."* Three measurements now point the
+same way — 27.5M transparent outputs at tip against Phase 0's expectation of a
+much smaller set, 73.0% of proof bandwidth, and an overhead that rises with
+height. **That decision is not taken here**, because Phase 5b's storage and
+latency numbers are the other half of it and have not been measured, but the
+evidence is accumulating in one direction and should be read as such.
+
+### What did not change
+
+Batching still saves 85.4%; it is orthogonal to path compression and already
+inside every figure above. The `ZUTREEXO_MEASURE_BATCHING=1` runs are unaffected.

@@ -15,7 +15,9 @@
 //!    object the moment anything commits to proof bytes.
 
 use crate::hash::{Hash, HASH_LEN};
-use crate::imt::{InsertionProof, Leaf, NonMembershipProof, Value, MAX_DEPTH};
+use crate::imt::{
+    empty_subtree_hashes, InsertionProof, Leaf, NonMembershipProof, Value, MAX_DEPTH,
+};
 use crate::pool::PoolId;
 use crate::utreexo::UtxoProof;
 
@@ -24,7 +26,7 @@ use crate::utreexo::UtxoProof;
 /// Phase 3 needs a migration path for the on-disk format; this is the wire-side
 /// counterpart and exists from the start so there is never a version-0 format
 /// to detect by guessing.
-pub const PROOF_FORMAT_VERSION: u8 = 1;
+pub const PROOF_FORMAT_VERSION: u8 = 2;
 
 /// Encoded size of a [`Leaf`]: two values and an index.
 const LEAF_LEN: usize = 32 + 32 + 8;
@@ -102,6 +104,13 @@ pub enum ProofCodecError {
         /// What was wrong.
         reason: &'static str,
     },
+
+    /// A request names a method this build does not implement.
+    #[error("unknown method tag {tag}")]
+    UnknownMethod {
+        /// The unrecognised tag byte.
+        tag: u8,
+    },
 }
 
 /// A bounds-checked cursor over a byte slice.
@@ -153,6 +162,18 @@ impl<'a> Reader<'a> {
                 offset: self.offset,
                 needed: 1,
             })
+    }
+
+    /// Consumes a little-endian `u32`.
+    ///
+    /// Exists because three call sites were doing `take(4)` and then a
+    /// `try_into` that cannot fail — `take` already guarantees the length — but
+    /// still needed an error arm for it, which was unreachable code in each.
+    pub fn u32_le(&mut self) -> Result<u32, ProofCodecError> {
+        let bytes = self.take(4)?;
+        let mut array = [0u8; 4];
+        array.copy_from_slice(bytes);
+        Ok(u32::from_le_bytes(array))
     }
 
     /// Consumes a little-endian `u64`.
@@ -220,6 +241,79 @@ pub trait CanonicalSerialize: Sized {
     }
 }
 
+/// Appends a sibling path with the derivable siblings omitted.
+///
+/// Layout: one length byte, then `ceil(len / 8)` bitmap bytes, then only the
+/// siblings whose bit is set. A clear bit means "this sibling is the canonical
+/// empty-subtree hash for its level", which the decoder reconstructs from
+/// `ladder`.
+///
+/// # Why this is safe against a lying encoder
+///
+/// A hostile bridge can clear a bit for a sibling that is *not* empty. The
+/// decoder then substitutes the empty hash, the verifier folds the path, and
+/// the computed root does not match the one it trusts — so the proof is
+/// rejected. The bitmap cannot be used to forge acceptance, only to produce a
+/// proof that fails. That is the same guarantee the dense encoding gives
+/// against a corrupted sibling, which is why this needs no extra check.
+fn write_path_sparse(path: &[Hash], ladder: &[Hash], out: &mut Vec<u8>) {
+    let len = u8::try_from(path.len()).unwrap_or(u8::MAX);
+    out.push(len);
+
+    let kept = usize::from(len);
+    let mut bitmap = vec![0u8; kept.div_ceil(8)];
+    for (level, sibling) in path.iter().take(kept).enumerate() {
+        if ladder.get(level) != Some(sibling) {
+            if let Some(byte) = bitmap.get_mut(level / 8) {
+                *byte |= 1 << (level % 8);
+            }
+        }
+    }
+    out.extend_from_slice(&bitmap);
+
+    for (level, sibling) in path.iter().take(kept).enumerate() {
+        if ladder.get(level) != Some(sibling) {
+            out.extend_from_slice(sibling);
+        }
+    }
+}
+
+/// Reads a sparse sibling path, restoring the omitted siblings from `ladder`.
+fn read_path_sparse(
+    reader: &mut Reader<'_>,
+    ladder: &[Hash],
+) -> Result<Vec<Hash>, ProofCodecError> {
+    let len = usize::from(reader.u8()?);
+    if len > usize::from(MAX_DEPTH) {
+        return Err(ProofCodecError::PathTooLong { found: len });
+    }
+    // The ladder is built from the depth the verifier expects. A path longer
+    // than it has no empty hash to fall back on, and silently truncating would
+    // turn a depth disagreement into a wrong root much later.
+    //
+    // Sliced once rather than indexed per level: the per-level lookup needed a
+    // `None` arm that this check already made unreachable, and unreachable
+    // error handling is indistinguishable from the reachable kind when reading
+    // the code.
+    let empties = ladder.get(..len).ok_or(ProofCodecError::Malformed {
+        reason: "sparse path is longer than the tree depth",
+    })?;
+
+    let bitmap = reader.take(len.div_ceil(8))?.to_vec();
+    let mut path = Vec::with_capacity(len);
+    for (level, empty) in empties.iter().enumerate() {
+        let present = bitmap
+            .get(level / 8)
+            .is_some_and(|byte| byte & (1 << (level % 8)) != 0);
+        if present {
+            path.push(reader.hash()?);
+        } else {
+            path.push(*empty);
+        }
+    }
+    Ok(path)
+}
+
 /// Appends a length-prefixed sibling path.
 fn write_path(path: &[Hash], out: &mut Vec<u8>) {
     // Depths above MAX_DEPTH are unrepresentable by construction; saturating
@@ -283,6 +377,114 @@ impl CanonicalSerialize for InsertionProof {
             new_leaf_siblings: reader.path()?,
         })
     }
+}
+
+/// A non-membership proof as a bridge serves it to a wallet.
+///
+/// # Why this wrapper exists
+///
+/// Two reasons, and they are the same reason.
+///
+/// The sparse encoding needs the pool: the omitted siblings are the canonical
+/// empty-subtree hashes, and those are domain-separated per pool, so a decoder
+/// cannot rebuild them without knowing which tree the proof came from. It needs
+/// the depth for the same reason.
+///
+/// And a proof *should* be pool-tagged regardless. A proof lifted from one
+/// pool's tree and applied to another fails on the root check, so nothing
+/// unsafe happens either way — but tagging turns that into a decode-time error
+/// naming the mistake, rather than a hash mismatch several layers down. This is
+/// the reasoning already applied to [`NullifierProofBundle`].
+///
+/// This is the response type for the bridge's
+/// `GetNullifierNonMembershipProof`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct NonMembershipResponse {
+    /// Which pool's tree the proof is against.
+    pub pool: PoolId,
+    /// The depth that tree was built at.
+    pub depth: u8,
+    /// Height whose root the proof is stated against.
+    ///
+    /// A proof is only meaningful against a root, and a root only exists at a
+    /// height. Without this a wallet cannot tell which root to check it with,
+    /// and a stale proof would look identical to a fresh one.
+    pub height: u32,
+    /// The proof itself.
+    pub proof: NonMembershipProof,
+}
+
+impl CanonicalSerialize for NonMembershipResponse {
+    fn write_body(&self, out: &mut Vec<u8>) {
+        out.push(self.pool.code());
+        out.push(self.depth);
+        out.extend_from_slice(&self.height.to_le_bytes());
+        write_leaf(&self.proof.low_leaf, out);
+        out.extend_from_slice(&self.proof.low_leaf_index.to_le_bytes());
+        match empty_subtree_hashes(self.pool, self.depth) {
+            Ok(ladder) => write_path_sparse(&self.proof.siblings, &ladder, out),
+            // An invalid depth cannot produce a ladder. Fall back to the dense
+            // form rather than emitting a truncated path: the decoder rejects
+            // the depth anyway, and this keeps the encoder total.
+            Err(_) => write_path(&self.proof.siblings, out),
+        }
+    }
+
+    fn read_body(reader: &mut Reader<'_>) -> Result<Self, ProofCodecError> {
+        let code = reader.u8()?;
+        let pool = PoolId::from_code(code).ok_or(ProofCodecError::UnknownPool { code })?;
+        let depth = reader.u8()?;
+        let height = reader.u32_le()?;
+        let low_leaf = read_leaf(reader)?;
+        let low_leaf_index = reader.u64_le()?;
+        let ladder = empty_subtree_hashes(pool, depth).map_err(|_| ProofCodecError::Malformed {
+            reason: "invalid tree depth",
+        })?;
+        let siblings = read_path_sparse(reader, &ladder)?;
+        Ok(NonMembershipResponse {
+            pool,
+            depth,
+            height,
+            proof: NonMembershipProof {
+                low_leaf,
+                low_leaf_index,
+                siblings,
+            },
+        })
+    }
+}
+
+/// Encodes an insertion proof with the derivable siblings omitted.
+///
+/// Not a [`CanonicalSerialize`] impl because the encoding depends on the pool
+/// and depth, which an [`InsertionProof`] does not carry. The callers that use
+/// it — [`NullifierProofBundle`] and the block bundle in `zutreexo-chain` — are
+/// pool-keyed already.
+pub fn write_insertion_sparse(proof: &InsertionProof, ladder: &[Hash], out: &mut Vec<u8>) {
+    write_leaf(&proof.low_leaf, out);
+    out.extend_from_slice(&proof.low_leaf_index.to_le_bytes());
+    write_path_sparse(&proof.low_leaf_siblings, ladder, out);
+    out.extend_from_slice(&proof.new_leaf_index.to_le_bytes());
+    write_path_sparse(&proof.new_leaf_siblings, ladder, out);
+}
+
+/// Decodes an insertion proof written by [`write_insertion_sparse`].
+pub fn read_insertion_sparse(
+    reader: &mut Reader<'_>,
+    ladder: &[Hash],
+) -> Result<InsertionProof, ProofCodecError> {
+    let low_leaf = read_leaf(reader)?;
+    let low_leaf_index = reader.u64_le()?;
+    let low_leaf_siblings = read_path_sparse(reader, ladder)?;
+    let new_leaf_index = reader.u64_le()?;
+    let new_leaf_siblings = read_path_sparse(reader, ladder)?;
+    Ok(InsertionProof {
+        low_leaf,
+        low_leaf_index,
+        low_leaf_siblings,
+        new_leaf_index,
+        new_leaf_siblings,
+    })
 }
 
 /// One pool's nullifier proofs for one block.
@@ -464,6 +666,30 @@ fn validate_utxo_proof_header(bytes: &[u8]) -> Result<(), ProofCodecError> {
     reader.take(targets_bytes)?;
 
     let hashes_len = usize::try_from(reader.u64_le()?).unwrap_or(usize::MAX);
+
+    // **Lower bound first, and this is the one that matters.** Every hash entry
+    // costs at least one byte under the tagged encoding — a bare tag for
+    // `Empty` or `Placeholder` — so a declared count exceeding the bytes that
+    // actually arrived is unsatisfiable no matter what those bytes contain.
+    //
+    // An earlier version of this function omitted this check and claimed in a
+    // comment that "a header claiming a billion hashes in forty bytes is
+    // rejected before anything is allocated." That was false, and exactly
+    // backwards: only *under*-declaration was caught. `bundle_codec.rs`'s
+    // bit-flip test found it by aborting the process on a 141,733,920,801-byte
+    // allocation — one flipped bit set the count to 2^32+1, which sailed past
+    // the upper-bound check below and straight into `rustreexo`'s
+    // `with_capacity`. That is `docs/design.md` D13's defect reached through
+    // our own decoder, so guarding it here is not redundant with waiting for
+    // upstream.
+    if hashes_len > reader.remaining() {
+        return Err(ProofCodecError::DeclaredLengthExceedsInput {
+            field: "utreexo proof hashes",
+            declared: hashes_len,
+            remaining: reader.remaining(),
+        });
+    }
+
     let hashes_bytes =
         hashes_len
             .checked_mul(UTXO_HASH_LEN)
@@ -471,17 +697,11 @@ fn validate_utxo_proof_header(bytes: &[u8]) -> Result<(), ProofCodecError> {
                 offset: 0,
                 needed: usize::MAX,
             })?;
-    // An upper bound, not an equality. Hash entries are variable width under
-    // the tagged encoding — one byte for `Empty` or `Placeholder`, 33 for
-    // `Some` — so a proof carrying either is legitimately shorter than the
-    // maximum. Requiring an exact fit would reject valid proofs.
-    //
-    // The bound still does the job this function exists for: it makes the
-    // declared count unsatisfiable by the bytes that actually arrived, so a
-    // header claiming a billion hashes in forty bytes is rejected before
-    // anything is allocated. Truncation within the bound is caught by
-    // `rustreexo`'s own parse immediately afterwards, which allocates
-    // incrementally rather than up front.
+    // Upper bound, not an equality. Hash entries are variable width — one byte
+    // for `Empty` or `Placeholder`, 33 for `Some` — so a proof carrying either
+    // is legitimately shorter than the maximum, and requiring an exact fit
+    // would reject valid proofs. This catches the opposite error from the check
+    // above: more bytes present than the declared count could ever consume.
     if hashes_bytes < reader.remaining() {
         return Err(ProofCodecError::UnexpectedEof {
             offset: 0,

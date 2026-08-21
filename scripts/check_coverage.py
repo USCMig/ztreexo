@@ -75,9 +75,9 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average.
     "crates/zutreexo-accumulator/src/proof.rs": {
-        "regions": 97.7,
-        "lines": 97.9,
-        "min_branches": 14,  # measured 16-17/20, varies — see below
+        "regions": 98.7,
+        "lines": 99.6,
+        "min_branches": 26,  # measured 29/32
     },
     # Domain separation is consensus-critical and cheap to cover fully.
     "crates/zutreexo-accumulator/src/hash.rs": {
@@ -207,9 +207,9 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # Phase 4a. The bundle format is what a bridge serves and a compact node
     # consumes, so its decoder is an untrusted-input surface like store.rs.
     "crates/zutreexo-chain/src/bundle.rs": {
-        "regions": 87.1,
-        "lines": 81.0,
-        "min_branches": 7,  # measured 9/14
+        "regions": 96.5,
+        "lines": 94.7,
+        "min_branches": 11,  # measured 13/14
     },
     # The compact state node itself: the one component that decides whether a
     # roots-only node accepts a block. Every rejection path here is a defence
@@ -219,30 +219,54 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 77.4,
         "min_branches": 20,  # measured 22/28
     },
+    # Phase 4b's bridge. `wire.rs` decodes bytes a client sent and `server.rs`
+    # decodes an HTTP request from one, so both are untrusted-input surfaces on
+    # the same footing as store.rs and bundle.rs. `lib.rs` is the retention and
+    # proof-serving logic behind them.
+    #
+    # These floors are lower than the codec files above and deliberately so:
+    # the uncovered remainder is mostly i/o error paths that need a socket to
+    # fail in a specific way mid-write, which is a fault-injection harness this
+    # phase did not build. What is covered is every path a peer can reach by
+    # sending bytes.
+    "crates/zutreexo-bridge/src/wire.rs": {
+        "regions": 96.3,
+        "lines": 91.3,
+        "min_branches": 6,  # measured 8/8
+    },
+    "crates/zutreexo-bridge/src/server.rs": {
+        "regions": 88.3,
+        "lines": 92.5,
+        "min_branches": 13,  # measured 15/16
+    },
+    "crates/zutreexo-bridge/src/lib.rs": {
+        "regions": 86.9,
+        "lines": 88.7,
+        "min_branches": 4,  # measured 4/4
+    },
 }
 
-# Measured 93.29 / 92.17 / 81.38 in the CI profile at Phase 4a, after
-# `cargo llvm-cov clean`, over the workspace **excluding never-measured files**
+# Measured 93.59 / 92.66 / 83.97 in the CI profile at Phase 4b, after
+# `cargo llvm-cov clean`, over the workspace excluding never-measured files
 # (see the calculation in `main`).
 #
-# Higher than Phase 3's 89.66 / 88.88 / 76.81 despite Phase 4a adding two more
-# operational binaries, and the rise is the point: those binaries used to be
-# inside the average. Three of them now account for 957 regions of permanent
-# 0%, which was dragging the figure to 83.4% and would have forced a third
-# consecutive lowering of a gate that is supposed to ratchet upward. Taking
-# them out leaves a floor over code that tests can actually reach, and Phase
-# 4a's library additions — bundle.rs and zutreexo-csn — are covered well enough
-# to raise it.
+# Up again from Phase 4a's 93.29 / 92.17 / 81.38, and the branch figure most of
+# all, because Phase 4b's additions are decoders and decoders were given
+# adversarial tests rather than round-trip tests alone. One of those found a
+# denial-of-service hole in code that had shipped two phases earlier
+# (`docs/design.md` D29), which is the argument for keeping this ratchet
+# pointed upward rather than lowering it whenever new code lands slightly below
+# the mean.
 #
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 93.2,
-    "lines": 92.1,
+    "regions": 93.5,
+    "lines": 92.6,
     # Percentage, not a count: the workspace denominator grows as code is added,
     # so an absolute floor here would have to be edited on every commit. Set
     # 0.3 below the measurement rather than at the usual one-decimal truncation,
     # because this is the one workspace metric the jitter described below can
     # move, and a flaky gate gets switched off.
-    "branches": 81.0,
+    "branches": 83.6,
 }
 
 # ---------------------------------------------------------------------------

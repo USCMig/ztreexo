@@ -56,7 +56,7 @@ use zebra_chain::block::Block;
 use zebra_chain::serialization::ZcashDeserialize;
 
 use zutreexo_accumulator::imt::{IndexedMerkleTree, Value, DEFAULT_DEPTH};
-use zutreexo_accumulator::{hash, CanonicalSerialize, PoolId};
+use zutreexo_accumulator::{CanonicalSerialize, PoolId};
 use zutreexo_testkit::source::{BlockSource, BlockStream, RpcSource};
 
 /// Bytes a compact block spends per shielded output, by pool.
@@ -174,11 +174,12 @@ fn sample(source: &RpcSource, start: u32, end: u32) -> Sampled {
 
 /// What a non-membership proof actually costs, measured rather than derived.
 struct ProofSize {
+    /// What a bridge actually sends: the sparse encoding, with the derivable
+    /// empty-subtree siblings replaced by a presence bitmap. Every crossover
+    /// below is computed from this.
     encoded: u64,
-    /// Same proof with the derivable empty-subtree siblings removed, plus a
-    /// one-bit-per-level presence bitmap. Not implemented in the wire format;
-    /// this is what it would cost if it were (`docs/benchmarks.md`, Phase 4a).
-    sparse: u64,
+    /// What it cost before Phase 4b, kept so the saving stays visible.
+    dense: u64,
     leaves: u64,
 }
 
@@ -217,23 +218,23 @@ fn measure_proof_size(depth: u8) -> ProofSize {
         }
     };
 
-    let encoded = proof.to_bytes().len() as u64;
+    // The dense form: what a proof cost before Phase 4b, kept as the baseline.
+    let dense = proof.to_bytes().len() as u64;
 
-    // Count siblings that are the canonical empty-subtree hash for their level.
-    let mut empty = hash::imt_empty_leaf(pool);
-    let mut derivable = 0u64;
-    for sibling in &proof.siblings {
-        if *sibling == empty {
-            derivable += 1;
-        }
-        empty = hash::imt_node(pool, &empty, &empty);
+    // The sparse form, measured rather than projected: this is what a bridge
+    // actually puts on the wire now.
+    let sparse = zutreexo_accumulator::proof::NonMembershipResponse {
+        pool,
+        depth,
+        height: 0,
+        proof,
     }
-    let bitmap = u64::from(depth).div_ceil(8);
-    let sparse = encoded - derivable * 32 + bitmap;
+    .to_bytes()
+    .len() as u64;
 
     ProofSize {
-        encoded,
-        sparse,
+        encoded: sparse,
+        dense,
         leaves: u64::from(count),
     }
 }
@@ -269,10 +270,11 @@ fn report(sampled: &Sampled, proof: &ProofSize, depth: u8, start: u32, tip: u32)
         "\n=== non-membership proof, depth {depth}, tree of {} leaves ===",
         proof.leaves
     );
-    println!("encoded               {} bytes", proof.encoded);
+    println!("sparse (on the wire)  {} bytes", proof.encoded);
     println!(
-        "sparse-path variant   {} bytes  (projected, not implemented)",
-        proof.sparse
+        "dense (pre-4b)        {} bytes  -> {:.1}% saved",
+        proof.dense,
+        100.0 * (1.0 - proof.encoded as f64 / proof.dense.max(1) as f64)
     );
 
     // Suffix sums: the cost of a gap of G blocks ending at the tip.

@@ -72,6 +72,8 @@ struct Totals {
     /// empty-subtree hash for their level.
     imt_siblings: u64,
     imt_empty_siblings: u64,
+    /// What the nullifier proofs would have cost before the sparse encoding.
+    dense_insertion_bytes: u64,
 }
 
 /// The empty-subtree hash at each level, for one pool.
@@ -252,7 +254,13 @@ fn accumulate(
     for (pool, proofs) in &bundle.insertions {
         let ladder = empty_ladder(*pool, depth);
         for proof in proofs {
-            totals.insertion_bytes += proof.to_bytes().len() as u64;
+            // Sparse, matching what the bundle total above actually contains.
+            // Measuring the dense form here while the total was sparse made the
+            // composition shares sum to 138%.
+            let mut scratch = Vec::new();
+            zutreexo_accumulator::proof::write_insertion_sparse(proof, &ladder, &mut scratch);
+            totals.insertion_bytes += scratch.len() as u64;
+            totals.dense_insertion_bytes += proof.to_bytes().len() as u64;
             for path in [&proof.low_leaf_siblings, &proof.new_leaf_siblings] {
                 for (level, sibling) in path.iter().enumerate() {
                     totals.imt_siblings += 1;
@@ -321,9 +329,16 @@ fn report(totals: &Totals, height: u32, elapsed: f64, final_report: bool) {
             totals.imt_empty_siblings
         );
         println!(
-            "  compressible        {:>12} B of {} B in nullifier proofs",
-            totals.imt_empty_siblings * 32,
-            totals.insertion_bytes
+            "  omitted from wire   {:>12} B",
+            totals.imt_empty_siblings * 32
+        );
+        println!(
+            "  nullifier proofs    {:>12} B sparse vs {} B dense -> {:.1}% saved",
+            totals.insertion_bytes,
+            totals.dense_insertion_bytes,
+            100.0
+                * (1.0
+                    - totals.insertion_bytes as f64 / totals.dense_insertion_bytes.max(1) as f64)
         );
     }
 
