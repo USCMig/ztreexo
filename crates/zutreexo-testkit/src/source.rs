@@ -508,6 +508,69 @@ mod tests {
     }
 
     #[test]
+    fn rpc_source_reads_a_block_hash() {
+        // Phase 5b: this is what makes reorg detection possible. Height alone
+        // does not identify a block, so a follower that tracked only heights
+        // would stack a replacement on the block it replaced.
+        let hash = "0000000000074f33c8f9ac98043854c02a64afaf99dacc2f8245b8ada694ba2e";
+        let addr = fake_zebrad(
+            r#"{"result":"0000000000074f33c8f9ac98043854c02a64afaf99dacc2f8245b8ada694ba2e","error":null}"#,
+        );
+        let source = RpcSource::new(&addr);
+        assert_eq!(source.block_hash(3_455_190).unwrap(), hash);
+    }
+
+    #[test]
+    fn a_block_hash_error_names_the_height() {
+        let addr = fake_zebrad(r#"{"result":null,"error":{"code":-8,"message":"out of range"}}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            RpcSource::block_hash(&source, 9_999_999),
+            Err(SourceError::Response {
+                height: 9_999_999,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_block_hash_with_no_result_is_missing_not_a_panic() {
+        let addr = fake_zebrad(r#"{"error":null}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.block_hash(5),
+            Err(SourceError::Missing { height: 5 })
+        ));
+    }
+
+    #[test]
+    fn rpc_source_returns_block_json_verbatim() {
+        // The live parse oracle. Returned as-is rather than parsed here,
+        // because the counting belongs with the comparison in shadow.rs where
+        // it can be kept field-for-field identical to
+        // scripts/capture_checkpoints.py.
+        let addr =
+            fake_zebrad(r#"{"result":{"height":42,"tx":[{"vin":[],"vout":[]}]},"error":null}"#);
+        let source = RpcSource::new(&addr);
+        let json = source.block_json(42, 2).unwrap();
+        assert_eq!(json.get("height").and_then(|h| h.as_u64()), Some(42));
+        assert_eq!(
+            json.get("tx").and_then(|t| t.as_array()).map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_block_json_error_field_becomes_a_response_error() {
+        let addr = fake_zebrad(r#"{"result":null,"error":{"code":-5,"message":"no such block"}}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.block_json(11, 2),
+            Err(SourceError::Response { height: 11, .. })
+        ));
+    }
+
+    #[test]
     fn rpc_source_turns_an_rpc_error_field_into_response_error() {
         let addr = fake_zebrad(r#"{"result":null,"error":{"code":-5,"message":"not found"}}"#);
         let source = RpcSource::new(&addr);

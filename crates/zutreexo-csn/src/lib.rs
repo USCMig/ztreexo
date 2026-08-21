@@ -97,12 +97,19 @@ impl CompactState {
     /// # Trusted in, verified after
     ///
     /// Nothing here is checked, and nothing here *can* be: roots are opaque.
-    /// What the caller gets is the guarantee that every block applied *after*
-    /// this point is verified against these roots, so a wrong seed diverges
-    /// from an honest bridge immediately rather than subtly. The mitigation for
-    /// the seed itself is comparison across independent bridges — the bridge's
-    /// `wire::Roots` response is a few hundred bytes for that reason — and
-    /// until Phase 7 commits roots on-chain that is the strongest available
+    /// What the caller gets is that every block applied *after* this point is
+    /// verified against these roots, so a wrong seed produces a state that
+    /// disagrees with an honest bridge.
+    ///
+    /// **Not "immediately", though.** That word was in this comment and it was
+    /// wrong: `a_wrong_leaf_counter_is_silent_and_sometimes_delayed` in
+    /// `zutreexo-accumulator` measures a seed with the wrong transparent leaf
+    /// counter producing *identical* roots for a block before diverging. Nor is
+    /// a bad seed ever rejected — Utreexo cannot tell.
+    ///
+    /// The mitigation is therefore comparison across independent bridges — the
+    /// bridge's `wire::Roots` response is a few hundred bytes for that reason —
+    /// and until Phase 7 commits roots on-chain that is the strongest available
     /// claim.
     ///
     /// `utxo_leaves` is the total ever inserted, not the unspent count — see
