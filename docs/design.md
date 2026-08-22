@@ -1071,6 +1071,147 @@ one. Bind it to loopback.
 
 ---
 
+## D35 — Privacy: the headline capability cannot be delivered privately as designed
+
+**Phase 6.** CLAUDE.md requires this analysis be written "regardless of
+outcome". The outcome is negative, and it lands on Phase 5a's headline result.
+
+### Two users, and only one of them has a problem
+
+The design serves two very different callers, and they leak differently.
+
+**A compact validating node** requests `BlockProofBundle`s **by height**. Doing
+initial block download it wants every height; following the tip it wants the
+latest. The request pattern carries no information the node is not already
+broadcasting by being a node. **This use case is clean**, and it is what Phases
+4 and 5b measured.
+
+**A light wallet** requests non-membership proofs **by nullifier value**. This
+one is the problem, and it is the use case behind Phase 5a's headline.
+
+### What a nullifier query actually discloses
+
+A nullifier is derived from the note and the spending key's nullifier key. Until
+the note is spent, **nobody but the holder can compute it** — that unlinkability
+is the shielded design. So asking a bridge "is nullifier X spent?" hands over a
+value that was, up to that moment, a secret.
+
+Three consequences, worsening:
+
+1. **The value itself.** The bridge learns a nullifier exists and is unspent.
+2. **Network identity bound to a future on-chain event.** When X is later
+   spent it appears in a block. The bridge — which also reads the chain — can
+   tie that transaction to whoever asked about X, and to when.
+3. **Linkage across a wallet's notes, which is the severe one.** A wallet
+   asking about X₁…Xₙ reveals that those n notes share an owner. On-chain those
+   spends may fall in different transactions, at different times, and would
+   otherwise be unlinkable. **A single batched query undoes that.**
+
+Compared to the status quo this is a strict regression. A scanning wallet
+downloads public data and compares locally; the server learns which blocks were
+fetched and nothing about which notes matched.
+
+### Decoy batching does not work, and the reason is specific to nullifiers
+
+The obvious mitigation is k-anonymity: ask about the real nullifier alongside
+k−1 fabricated ones. Decoys are cheap to generate, since nullifiers are
+pseudorandom 32-byte values and a random one is indistinguishable on its face.
+Responses do not betray them either — an absent decoy returns the same
+non-membership proof a genuine unspent nullifier does.
+
+**It fails retrospectively.** The wallet queried S = {X} ∪ decoys, all reported
+unspent. Later the wallet spends the note, and X appears in a block. The bridge
+reads the chain, observes that exactly one member of S ever showed up, and knows
+it was the real one. The anonymity set collapses from k to 1 **at the moment the
+note is spent** — which is the moment it mattered.
+
+Decoys therefore protect only notes that are never spent, and the linkage in
+point 3 above is untouched: the subset of previously-queried values that later
+appear on-chain is precisely the wallet's own set.
+
+The wallet cannot escape by drawing decoys from real unspent nullifiers,
+because it cannot compute anyone else's. Drawing them from already-spent ones
+fails immediately, since those answer `ALREADY_SPENT`.
+
+Even granting that decoys worked, the price is steep. Against Phase 5a's
+measured figures, with a sparse proof at 631 bytes:
+
+| gap | notes | k=1 | k=10 | k=100 |
+|---|---|---|---|---|
+| 1,000 | 10 | 46.1× | 4.6× | **0.5×** |
+| 10,000 | 10 | 347× | 34.7× | 3.5× |
+| 400,000 | 10 | 6,844× | 684× | 68.4× |
+| 400,000 | 100 | 684× | 68.4× | 6.8× |
+
+and the crossover for a 10-note wallet moves from 58 blocks to 5,846 — from
+about an hour offline to about five days.
+
+### The other three options
+
+**Ask only about nullifiers you are about to publish.** Sound: the value goes
+public within seconds anyway. It also **eliminates Framing A entirely**, which
+is the watch-only spend-status query — the one Phase 5a measured at 317× to
+31,705×, and the one CLAUDE.md calls the headline. A wallet checking whether its
+note has *already* been spent is by definition not about to publish that
+nullifier.
+
+**Private information retrieval.** Genuinely solves it, and destroys the
+efficiency argument that motivates the design: single-server PIR costs the
+server work linear in the database per query. D34 measured a non-membership
+proof at 0.010 ms; a PIR query over 54.1M nullifiers is many orders above that.
+CLAUDE.md §7 already flags Tachyon's PIR work as possibly subsuming this
+project, and on this axis it does.
+
+**Run your own bridge.** No leak, no saving — the wallet holds the full IMT. Fine
+for an operator who wants compact *validation*, which is the clean use case
+above, and no answer at all for a light client.
+
+### A direction that might survive, offered as a sketch
+
+Random decoys fail because the wallet chooses them. **Ambiguity drawn from the
+value space does not**, because the candidate set is other people's real
+nullifiers, which do appear on-chain and so cannot be filtered out
+retrospectively.
+
+Concretely: reveal a b-bit prefix of the nullifier and receive enough of the
+tree to settle membership locally. The bridge learns X lies among roughly
+2⁻ᵇ·|set| real values — at b = 16 over 54.1M nullifiers, about 760 candidates —
+and that ambiguity persists after the spend, because the other candidates are
+genuine notes belonging to other people.
+
+**The obstacle is our own layout.** An indexed Merkle tree stores leaves in
+*insertion* order and maintains sortedness through the `next_index` linked list
+(§2.1), so a contiguous value range is not a contiguous subtree and cannot be
+served as one. A wallet would have to fetch scattered low-leaf candidates and
+their paths — roughly 760 × 631 B ≈ 480 KB, still about 90× better than a
+year-long scan, but nothing like 31,705×, and it needs an index the bridge does
+not currently maintain.
+
+This is a research direction, not a design. It is recorded because it is the
+only mitigation examined here that is not defeated on inspection.
+
+### Conclusion
+
+**Phase 5a's headline capability — cheap watch-only spend-status checking —
+cannot be delivered privately by bridge-served non-membership proofs.** Every
+mitigation either destroys the capability (publish-only), destroys the
+efficiency (PIR), destroys the point (run your own bridge), or does not work
+(decoys).
+
+This does not sink the project. The compact-node use case is unaffected and is
+where Phases 4 and 5b's results live. But `docs/benchmarks.md` Phase 5a should
+be read with this attached: **the 31,705× is a bandwidth measurement of a query
+a privacy-conscious Zcash wallet should not make**, and it sits alongside the
+trust caveat already recorded there. Two independent reasons the headline is
+weaker than its number.
+
+Phase 7 does not change this. Committing accumulator roots on-chain fixes the
+*trust* caveat — the wallet would no longer need a bridge's word for the root —
+and does nothing about the leak, because the wallet must still ask someone for
+a proof.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage

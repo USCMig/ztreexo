@@ -398,3 +398,12 @@ INFO: seed corpus: files: 222 min: 1b max: 4083b total: 92617b rss: 57Mb
 #17095984	REDUCE cov: 795 ft: 2691 corp: 243/81Kb lim: 4096 exec/s: 25516 rss: 423Mb L: 64/3665 MS: 5 InsertByte-InsertByte-ShuffleBytes-EraseBytes-ChangeASCIIInt-
 #17212506	REDUCE cov: 795 ft: 2691 corp: 243/81Kb lim: 4096 exec/s: 25424 rss: 423Mb L: 61/3665 MS: 2 ChangeASCIIInt-EraseBytes-
 #17260118	REDUCE cov: 795 ft: 2691 corp: 243/81Kb lim: 4096 exec/s: 25419 rss: 423Mb L: 2860/3665 MS: 2 ChangeByte-EraseBytes-
+#18352557	REDUCE cov: 795 ft: 2691 corp: 243/81Kb lim: 4096 exec/s: 24733 rss: 423Mb L: 716/3665 MS: 4 ChangeByte-ChangeByte-ShuffleBytes-CrossOver-
+#18505940	REDUCE cov: 795 ft: 2691 corp: 243/81Kb lim: 4096 exec/s: 24641 rss: 423Mb L: 66/3665 MS: 3 ChangeASCIIInt-EraseBytes-ChangeASCIIInt-
+#18535228	REDUCE cov: 795 ft: 2691 corp: 243/81Kb lim: 4096 exec/s: 24615 rss: 423Mb L: 64/3665 MS: 3 ChangeASCIIInt-ChangeBit-EraseBytes-
+#19948850	NEW    cov: 795 ft: 2694 corp: 244/82Kb lim: 4096 exec/s: 23890 rss: 423Mb L: 667/3665 MS: 2 ChangeBinInt-CrossOver-
+#20129941	REDUCE cov: 795 ft: 2694 corp: 244/82Kb lim: 4096 exec/s: 23822 rss: 423Mb L: 631/3665 MS: 1 EraseBytes-
+#20211756	REDUCE cov: 795 ft: 2694 corp: 244/82Kb lim: 4096 exec/s: 23778 rss: 423Mb L: 225/3665 MS: 5 EraseBytes-InsertByte-InsertRepeatedBytes-ChangeByte-EraseBytes-
+#20883147	REDUCE cov: 795 ft: 2694 corp: 244/82Kb lim: 4096 exec/s: 23543 rss: 423Mb L: 606/3665 MS: 1 EraseBytes-
+#21072519	REDUCE cov: 795 ft: 2694 corp: 244/82Kb lim: 4096 exec/s: 23492 rss: 423Mb L: 365/3665 MS: 2 ChangeBit-EraseBytes-
+#21247608	REDUCE cov: 795 ft: 2694 corp: 244/82Kb lim: 4096 exec/s: 23426 rss: 423Mb L: 144/3665 MS: 4 EraseBytes-ChangeBit-InsertByte-CopyPart-

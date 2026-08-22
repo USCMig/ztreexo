@@ -189,3 +189,15 @@ INFO: seed corpus: files: 82 min: 1b max: 414b total: 5688b rss: 57Mb
 #119980414	REDUCE cov: 184 ft: 449 corp: 72/6215b lim: 4096 exec/s: 181513 rss: 553Mb L: 217/634 MS: 5 ChangeBit-ShuffleBytes-ChangeBinInt-EraseBytes-CrossOver-
 #122002180	REDUCE cov: 184 ft: 449 corp: 72/6207b lim: 4096 exec/s: 181012 rss: 553Mb L: 209/634 MS: 4 ChangeBit-CrossOver-PersAutoDict-EraseBytes- DE: "I\000\000\000\000\000\000\000"-
 #128813943	REDUCE cov: 184 ft: 449 corp: 72/6206b lim: 4096 exec/s: 180918 rss: 553Mb L: 162/634 MS: 1 EraseBytes-
+#133689820	REDUCE cov: 184 ft: 449 corp: 72/6204b lim: 4096 exec/s: 180906 rss: 553Mb L: 299/634 MS: 2 EraseBytes-ChangeBinInt-
+#133773224	REDUCE cov: 184 ft: 449 corp: 72/6202b lim: 4096 exec/s: 180774 rss: 553Mb L: 297/634 MS: 4 CMP-ShuffleBytes-ChangeByte-EraseBytes- DE: "\001\000"-
+#133801090	REDUCE cov: 184 ft: 449 corp: 72/6201b lim: 4096 exec/s: 180812 rss: 553Mb L: 296/634 MS: 1 EraseBytes-
+#134217728	pulse  cov: 184 ft: 449 corp: 72/6201b lim: 4096 exec/s: 180886 rss: 553Mb
+#138777364	REDUCE cov: 184 ft: 449 corp: 72/6200b lim: 4096 exec/s: 180935 rss: 553Mb L: 21/634 MS: 2 ChangeBinInt-EraseBytes-
+#144998024	REDUCE cov: 184 ft: 449 corp: 72/6197b lim: 4096 exec/s: 181021 rss: 553Mb L: 599/634 MS: 4 ShuffleBytes-ChangeBit-ChangeBit-EraseBytes-
+#144999152	REDUCE cov: 184 ft: 449 corp: 72/6196b lim: 4096 exec/s: 181022 rss: 553Mb L: 598/634 MS: 3 InsertByte-ChangeBit-EraseBytes-
+#148576756	REDUCE cov: 184 ft: 449 corp: 72/6192b lim: 4096 exec/s: 180970 rss: 553Mb L: 594/634 MS: 4 ShuffleBytes-ChangeBit-EraseBytes-InsertByte-
+#158750168	REDUCE cov: 184 ft: 449 corp: 72/6189b lim: 4096 exec/s: 181015 rss: 553Mb L: 134/634 MS: 2 ChangeByte-EraseBytes-
+#158972344	REDUCE cov: 184 ft: 449 corp: 72/6183b lim: 4096 exec/s: 181061 rss: 553Mb L: 128/634 MS: 1 EraseBytes-
+#161225021	REDUCE cov: 184 ft: 449 corp: 72/6181b lim: 4096 exec/s: 181151 rss: 553Mb L: 126/634 MS: 1 EraseBytes-
+#163645721	REDUCE cov: 184 ft: 449 corp: 72/6180b lim: 4096 exec/s: 181024 rss: 553Mb L: 125/634 MS: 4 CMP-CrossOver-ChangeBinInt-EraseBytes- DE: "\000\000\000\000\000\000\000\000"-

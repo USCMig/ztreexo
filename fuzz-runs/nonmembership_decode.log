@@ -78,3 +78,5 @@ INFO: seed corpus: files: 71 min: 1b max: 1129b total: 10361b rss: 57Mb
 #8388608	pulse  cov: 323 ft: 943 corp: 65/9895b lim: 4096 exec/s: 20068 rss: 445Mb
 #8858938	REDUCE cov: 323 ft: 943 corp: 65/9863b lim: 4096 exec/s: 20088 rss: 445Mb L: 123/1312 MS: 3 PersAutoDict-ChangeByte-EraseBytes- DE: "\001\000\000\000\000\000\000X"-
 #9388650	REDUCE cov: 323 ft: 943 corp: 65/9860b lim: 4096 exec/s: 19933 rss: 445Mb L: 91/1312 MS: 2 EraseBytes-PersAutoDict- DE: "\023\000\000\000"-
+#13692952	REDUCE cov: 323 ft: 943 corp: 65/9857b lim: 4096 exec/s: 18939 rss: 445Mb L: 93/1312 MS: 2 EraseBytes-CMP- DE: "\272\321\3429\246\235\220\245\341(\321\272]s\321\235\323\210\032-n\351\377Q=NG\201\344c\224%"-
+#15179225	NEW    cov: 323 ft: 944 corp: 66/10686b lim: 4096 exec/s: 18244 rss: 445Mb L: 829/1312 MS: 3 PersAutoDict-CMP-CrossOver- DE: "\272\321\3429\246\235\220\245\341(\321\272]s\321\235\323\210\032-n\351\377Q=NG\201\344c\224%"-"\273\225E\031\325l\213\224\307\374\002\253\214dH[;\031\003,r\355\200O\241\300\212GKv\313\322"-

@@ -662,6 +662,19 @@ than about a day is better off with proofs even holding 100 notes, and a
 year-long gap favours them by two to four orders of magnitude. This is the
 result the project was built to find.
 
+> **Read this table with `docs/design.md` D35 attached (added 2026-08-22).**
+> Phase 6's privacy review concludes that **this exact query cannot be made
+> privately.** Asking a bridge about a specific nullifier hands over a value
+> only the note's owner could compute, and batching several links those notes
+> to one wallet. Decoys do not fix it: when the note is later spent the real
+> nullifier appears on-chain and the anonymity set collapses to one.
+>
+> So the numbers above are a *bandwidth* measurement of a query a
+> privacy-conscious Zcash wallet should not make. Together with the trust
+> caveat below, that is two independent reasons the headline is weaker than
+> 31,705× suggests. The compact-node results in Phases 4 and 5b are unaffected;
+> they request by height and leak nothing.
+
 **Framing B — the wallet is doing a full sync.** It also wants notes *received*
 during the gap, which needs trial decryption, which needs the compact block for
 every block in the gap regardless. The nullifiers are already inside that

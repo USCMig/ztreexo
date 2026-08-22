@@ -40,7 +40,7 @@ infrastructure, `fix/<topic>` for defects.
 | 4b | Sparse wire format, bridge service, served IBD | `phase-4a-bundle` | **complete** — Phase 4 DoD met over a real socket; sparse paths cut wallet proofs 53.2% and bundle overhead 170.5% to 152.6%. Not gRPC ([D27](docs/design.md)) |
 | 5a | Headline measurement: nullifier-check cost vs gap length | `phase-4a-bundle` | **complete** — the claim holds decisively for spend-status queries (317x to 31,705x at a year's gap) and barely at all for full sync (<=14.7% of bytes, 0% of trial decryption) |
 | 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | `phase-5b-shadow` | **complete** — storage measured at last (31.7 GiB vs 693 B, ~49M:1), latency p50/p99 over 60k sandblasting blocks and 1,021 at tip, and 500 blocks shadowed at the live tip with zero divergences. Reverses the narrow-or-keep direction: **keep the transparent forest** (below). Shadow is external to Zebra ([D30](docs/design.md)); reorg recovery is a queue for a compact node ([D31](docs/design.md)) |
-| 6 | Fuzzing, DoS analysis, privacy review | — | not started |
+| 6 | Fuzzing, DoS analysis, privacy review | `phase-6-adversarial` | **in progress** — 72 h fuzz run launched 2026-08-22 over 5 targets; two excluded on an upstream panic ([D33](docs/design.md)). Bridge hardened: slowloris was total denial from one idle socket, now closed ([D34](docs/design.md)). **Privacy review complete and negative** — Phase 5a's headline query cannot be made privately ([D35](docs/design.md)). External review dropped (below) |
 | 7 | ZIP draft — gated on 5 and 6 | — | not started |
 
 ## Known gaps, carried deliberately
@@ -55,6 +55,15 @@ on a 141 GB allocation. The assumption that D13 was purely an upstream problem
 to wait out was wrong: the wrapper written to contain it did not. Every decoder
 added from here should get a bit-flip and truncation sweep at the time it is
 written, not at Phase 6.
+
+**Phase 6's external-review DoD is dropped, deliberately.** CLAUDE.md Phase 6
+requires the privacy analysis be "reviewed by someone outside the project" and
+an "external review request to Zcash Foundation / ZODL / Shielded Labs before
+any consensus proposal". Neither is something this repo can satisfy on its own,
+and both only bind before a consensus proposal — which this project is not
+making. Dropped on 2026-08-22 the way the Tachyon gate was, rather than left to
+hold Phase 6 open forever. The analysis is written and stands on its own
+([D35](docs/design.md)); the team will seek outside eyes as availability allows.
 
 **Reorg handling is tested in three of its four parts.** Taken separately,
 because they need different things to test them:
