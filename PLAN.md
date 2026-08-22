@@ -73,7 +73,7 @@ because they need different things to test them:
 | compact node restores a kept state and stays byte-identical to a cold replay | `zutreexo-csn/tests/reorg.rs` | no |
 | deciding *where* to unwind to | `zutreexo-testkit/tests/shadow_fork.rs` | no |
 | reload the bridge snapshot, replay the common prefix | `load` + `apply_block`, covered elsewhere | no |
-| the three composed, against a chain that actually forked | — | **yes** |
+| **the three composed, against a chain that forked** | **`zutreexo-testkit/tests/shadow_reorg.rs`** | **no — closed 2026-08-22** |
 
 `shadow.rs` calls `shadow::find_fork` rather than keeping its own copy, so the
 tested walk is the one that runs. The `reorg.rs` invariant is CLAUDE.md Phase
@@ -81,16 +81,27 @@ tested walk is the one that runs. The `reorg.rs` invariant is CLAUDE.md Phase
 end **byte-identical** to a node that only ever saw the final chain — with both
 blindness checks confirmed firing.
 
-What remains untested is the composition. **The 500-block shadow run of
-2026-08-22 saw zero reorgs over 12h39m**, which was the expected outcome and
-does not change this line: the composed path has still never run against a real
-fork. The failure mode is safe rather than silent — every path in `unwind` ends
-the run with a named reason, and roots are re-compared byte-for-byte after
-rewinding — but "safe when it fails" is not "known to work".
+**Closed with the scripted stub**, which this file previously identified as the
+only one of the three options that belongs in CI. `unwind` moved into
+`zutreexo_testkit::shadow` behind a `ChainView` trait, so a test can drive it
+with a node scripted to fork. The trait returns `BlockSummary` rather than block
+bytes deliberately: deserialisation is covered thoroughly elsewhere, and
+requiring it here would mean fabricating consensus-encoded blocks for two
+divergent chains to exercise a path that never touches a byte.
 
-Closing it needs either a much longer shadow run, testnet (which reorgs far more
-often), or a scripted node stub that serves a fork on demand. The last is the
-only one that belongs in CI.
+Six cases, including the invariant that matters — apply branch A, unwind, apply
+branch B, end **byte-identical** to a node that only ever saw the final chain —
+plus a no-op control and a refusal when the fork predates the snapshot.
+
+Both blindness checks fire. Making `unwind` rewind unconditionally fails the
+no-op control. And the cold-replay comparison turned out to pass whether or not
+the branches differed, so the test now asserts the fixture *is* a reorg;
+confirmed by setting branch B's salt equal to A's, which nothing else in the
+file notices.
+
+**Still true:** mainnet has never reorged under a shadow run. The 500-block run
+of 2026-08-22 saw zero in 12h39m. What is now tested is that the code handles
+one correctly when it comes.
 
 **A full node's reorg data does not fit at tip, which is itself a finding.**
 `RollbackJournal` was built in stage 2c and is the wrong tool at mainnet tip:
