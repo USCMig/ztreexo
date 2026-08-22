@@ -30,7 +30,7 @@ infrastructure, `fix/<topic>` for defects.
 | Phase | Scope | Branch | Status |
 |---|---|---|---|
 | 0 | Baseline measurement, fixture capture | — | **complete** — mainnet tip 2026-08-12, [`docs/benchmarks.md`](docs/benchmarks.md) |
-| 1 | Accumulator core: Utreexo wrapper + IMT | — | **complete for the IMT**; transparent side blocked upstream, and one DoD item unmet (below) |
+| 1 | Accumulator core: Utreexo wrapper + IMT | — | **complete** — DoD met as amended 2026-08-22: 100% of *reachable* branches on `imt.rs` (83/88, five unreachable guards enumerated in [`CLAUDE.md`](CLAUDE.md)), reproducible run to run. Transparent side was blocked upstream, now unpinned via a fork ([D25](docs/design.md)) |
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
@@ -178,42 +178,50 @@ as D24. **Carried forward: Phase 6's deserialisation fuzzing must reseal a valid
 checksum over each mutated payload, or it will spend its entire budget bouncing
 off the checksum and report a clean run having tested nothing.**
 
-**Phase 1 DoD is not met, and by more than it first appeared.** It requires
-*"100% branch coverage on `imt.rs`"*. That criterion had never been measured
-when the phase was called done, because *branch* coverage needs a nightly
-toolchain — stable rejects `-Z coverage-options=branch`.
+**Phase 1's DoD is met, as amended — closed 2026-08-22.** It had been open
+since Phase 1, requiring *"100% branch coverage on `imt.rs`"*, a criterion never
+measured when the phase was called done because *branch* coverage needs nightly.
+First measured 2026-08-16 at **41/48, 85.42%**.
 
-Measured 2026-08-16 on nightly:
+The blocker was never effort. Branch coverage moved between identical runs,
+because the property suites reseed each time: `proof.rs` reported 17/20 and then
+16/20 on byte-identical source while its region and line figures were the same
+to the digit. A ratchet against a wandering number fails at random, and a gate
+that cries wolf gets switched off, taking the stable ratchets with it.
 
-| `imt.rs` | covered | total | % |
-|---|---|---|---|
-| regions | 1027 | 1069 | 96.07% |
-| lines | 592 | 619 | 95.64% |
-| functions | 65 | 68 | 95.59% |
-| **branches** | **41** | **48** | **85.42%** |
+Fixed by `crates/zutreexo-accumulator/tests/imt_branches.rs`: 27 deterministic
+cases — fixed inputs, named expected errors, nothing generated — covering every
+path a caller reaches by getting something wrong. The happy paths stay with
+proptest, which is what it is for.
 
-The region figure was flattering it. The real gap against the DoD is **7
-uncovered branches** — which is small enough to close deliberately, and is the
-right way to read it rather than as a percentage.
+| `imt.rs` | before | after |
+|---|---|---|
+| regions | 96.07% | **97.41%** |
+| lines | 95.64% | **98.33%** |
+| branches | 75/88 | **83/88** |
 
-`scripts/check_coverage.py` enforces per-file floors so coverage can only
-improve, and the CI job runs on nightly for the same reason.
+Measured twice back to back: **identical**. That is what makes the gate
+enforceable, and `imt.rs`'s branch floor is now **exact** rather than set a
+couple below the observed minimum — the only such floor in the workspace.
 
-**Branch coverage is not reproducible between runs**, which constrains how hard
-that gate can be pushed. The property suites drive `proof.rs` and `imt.rs`
-through proptest, which seeds a fresh RNG each run, so which bounds-check
-branches get exercised varies: measured back to back on identical source,
-`proof.rs` reported 17/20 and then 16/20, while its region and line coverage
-were byte-identical both times. On a 20-branch denominator one branch is five
-percentage points, so a zero-tolerance branch ratchet would fail CI at random —
-and a gate that cries wolf gets switched off, taking the stable region and line
-ratchets with it. Branch floors are therefore absolute covered-counts set about
-two branches below the observed minimum; regions and lines stay strict.
+**The remaining five sides are unreachable through the public API**, not merely
+untested, so the DoD is amended in `CLAUDE.md` to *100% of reachable branches*,
+following the precedent set when Phase 2's DoD turned out to name a comparison
+that did not exist. Each is enumerated there. Deleting them to reach 88 would
+trade a real safety net for a number: they exist so a refactor that breaks an
+invariant fails loudly instead of computing a wrong root.
 
-**Making the Phase 1 DoD enforceable therefore needs a deterministic run**, not
-a tighter threshold: a fixed proptest seed, or a separate non-randomised suite
-for `imt.rs`. That is the actual prerequisite for closing the seven branches,
-and it is not blocking stage 2b.
+Two were checked rather than assumed. `verify_insertion`'s capacity guard is
+*shadowed* — the append index equals `leaf_count`, so a count past capacity is
+an index past capacity and `check_path` rejects first; measured at depths 1, 2
+and 3. And `undo_insert`'s `next_index` disjunct is unreachable because one leaf
+points at any given value, while its `next_value` sibling **is** reachable and
+now has its own test, since short-circuit evaluation means one test cannot cover
+both.
+
+**Branch floors elsewhere remain absolute covered-counts set about two below
+the observed minimum**, because every other floored file is still driven by
+proptest and still wanders. Regions and lines stay strict everywhere.
 
 **CI had never executed the `zutreexo-chain` crate, and nobody noticed.**
 Discovered 2026-08-16 when the coverage job first ran on GitHub. Every test that
