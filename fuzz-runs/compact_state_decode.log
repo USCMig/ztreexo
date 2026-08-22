@@ -56,3 +56,8 @@ INFO: seed corpus: files: 61 min: 1b max: 558b total: 6747b rss: 57Mb
 #53195934	REDUCE cov: 301 ft: 680 corp: 63/16Kb lim: 4096 exec/s: 208611 rss: 702Mb L: 3053/3057 MS: 1 EraseBytes-
 #67108864	pulse  cov: 301 ft: 680 corp: 63/16Kb lim: 4096 exec/s: 161708 rss: 702Mb
 #88331759	REDUCE cov: 301 ft: 680 corp: 63/14758b lim: 4096 exec/s: 132431 rss: 702Mb L: 1293/3057 MS: 5 CopyPart-EraseBytes-InsertByte-PersAutoDict-EraseBytes- DE: "\000\000\000\000\000\000\000\002"-
+#134217728	pulse  cov: 301 ft: 680 corp: 63/14758b lim: 4096 exec/s: 128438 rss: 702Mb
+#156241394	REDUCE cov: 301 ft: 680 corp: 63/14730b lim: 4096 exec/s: 124001 rss: 702Mb L: 58/3057 MS: 5 ShuffleBytes-EraseBytes-PersAutoDict-ChangeBinInt-CopyPart- DE: "\001\000"-
+#185928144	REDUCE cov: 301 ft: 680 corp: 63/14698b lim: 4096 exec/s: 117156 rss: 702Mb L: 1261/3057 MS: 5 InsertByte-ChangeBit-EraseBytes-ChangeASCIIInt-CopyPart-
+#198426938	REDUCE cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 117830 rss: 702Mb L: 108/3057 MS: 4 EraseBytes-CrossOver-ChangeBit-InsertByte-
+#268435456	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 116863 rss: 702Mb

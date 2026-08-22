@@ -28,9 +28,6 @@ zutreexo-csn.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-# Only `tests/fuzz_seeds.rs` needs this — it writes one valid encoding of every
-# fuzzed type, and the bridge owns two of them.
-zutreexo-bridge.workspace = true
 
 [lints]
 workspace = true

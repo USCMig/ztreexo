@@ -26,7 +26,6 @@ use std::path::PathBuf;
 use zutreexo_accumulator::imt::{ImtState, Value};
 use zutreexo_accumulator::proof::{encode_utxo_proof, NonMembershipResponse};
 use zutreexo_accumulator::{CanonicalSerialize, IndexedMerkleTree, PoolId, UtxoLeaf};
-use zutreexo_bridge::wire::{Request, Roots};
 use zutreexo_chain::{
     apply_and_prove, save, ApplyOptions, BlockSummary, ChainAccumulators, OutPoint,
 };
@@ -151,37 +150,11 @@ fn dump_fuzz_seeds() {
     .unwrap();
     write("compact_state_decode", "populated", &seeded.to_bytes());
 
-    // ---- wire requests, one per method tag ----
-    write(
-        "wire_request_decode",
-        "bundle",
-        &Request::BlockProofBundle { height: 1_700_000 }.to_bytes(),
-    );
-    write(
-        "wire_request_decode",
-        "nonmembership",
-        &Request::NullifierNonMembership {
-            pool: PoolId::Orchard,
-            nullifier: nullifier(9),
-        }
-        .to_bytes(),
-    );
-    write(
-        "wire_request_decode",
-        "roots",
-        &Request::AccumulatorRoots.to_bytes(),
-    );
-    write(
-        "wire_request_decode",
-        "roots-response",
-        &Roots {
-            height: 1,
-            depth: DEPTH,
-            utxo: state.utxo_roots(),
-            nullifiers: state.nullifier_roots().into_iter().collect(),
-        }
-        .to_bytes(),
-    );
+    // Wire requests and `Roots` are seeded by
+    // `zutreexo-bridge/tests/fuzz_seeds.rs` instead. Generating them here
+    // would need a dev-dependency on the bridge, which compiles a second
+    // instrumented copy of that crate and halves its reported function
+    // coverage — a measurement artifact created by the tool meant to measure.
 
     // ---- sparse non-membership proof ----
     let tree =

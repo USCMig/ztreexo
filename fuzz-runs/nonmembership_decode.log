@@ -80,3 +80,11 @@ INFO: seed corpus: files: 71 min: 1b max: 1129b total: 10361b rss: 57Mb
 #9388650	REDUCE cov: 323 ft: 943 corp: 65/9860b lim: 4096 exec/s: 19933 rss: 445Mb L: 91/1312 MS: 2 EraseBytes-PersAutoDict- DE: "\023\000\000\000"-
 #13692952	REDUCE cov: 323 ft: 943 corp: 65/9857b lim: 4096 exec/s: 18939 rss: 445Mb L: 93/1312 MS: 2 EraseBytes-CMP- DE: "\272\321\3429\246\235\220\245\341(\321\272]s\321\235\323\210\032-n\351\377Q=NG\201\344c\224%"-
 #15179225	NEW    cov: 323 ft: 944 corp: 66/10686b lim: 4096 exec/s: 18244 rss: 445Mb L: 829/1312 MS: 3 PersAutoDict-CMP-CrossOver- DE: "\272\321\3429\246\235\220\245\341(\321\272]s\321\235\323\210\032-n\351\377Q=NG\201\344c\224%"-"\273\225E\031\325l\213\224\307\374\002\253\214dH[;\031\003,r\355\200O\241\300\212GKv\313\322"-
+#16777216	pulse  cov: 323 ft: 944 corp: 66/10686b lim: 4096 exec/s: 17476 rss: 445Mb
+#18244045	REDUCE cov: 323 ft: 944 corp: 66/10685b lim: 4096 exec/s: 17358 rss: 445Mb L: 90/1312 MS: 5 ShuffleBytes-EraseBytes-ChangeASCIIInt-CrossOver-ChangeBit-
+#33554432	pulse  cov: 323 ft: 944 corp: 66/10685b lim: 4096 exec/s: 16496 rss: 445Mb
+#39071299	REDUCE cov: 323 ft: 944 corp: 66/10684b lim: 4096 exec/s: 16812 rss: 445Mb L: 185/1312 MS: 4 EraseBytes-ChangeByte-CMP-CopyPart- DE: "<\203\276\271\361\200\006\013q[\007h\314\371\311\220(t8\310\360\264\020r\374\227\355RW3^z"-
+#39283186	REDUCE cov: 323 ft: 944 corp: 66/10652b lim: 4096 exec/s: 16759 rss: 445Mb L: 121/1312 MS: 2 ChangeBinInt-EraseBytes-
+#40867550	REDUCE cov: 323 ft: 944 corp: 66/10619b lim: 4096 exec/s: 16707 rss: 445Mb L: 217/1312 MS: 4 EraseBytes-CMP-CMP-CopyPart- DE: "\000\000\000\000\000\000\0001"-"\272\000"-
+#46786899	REDUCE cov: 323 ft: 944 corp: 66/10618b lim: 4096 exec/s: 16896 rss: 445Mb L: 91/1312 MS: 4 ChangeByte-EraseBytes-ShuffleBytes-InsertByte-
+#46915917	REDUCE cov: 323 ft: 944 corp: 66/10617b lim: 4096 exec/s: 16888 rss: 445Mb L: 89/1312 MS: 3 ChangeBit-InsertByte-EraseBytes-

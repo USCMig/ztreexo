@@ -3399,7 +3399,6 @@ dependencies = [
  "thiserror 2.0.20",
  "zebra-chain",
  "zutreexo-accumulator",
- "zutreexo-bridge",
  "zutreexo-chain",
  "zutreexo-csn",
 ]

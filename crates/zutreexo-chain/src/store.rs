@@ -411,12 +411,12 @@ pub fn load(path: &Path) -> Result<ChainAccumulators, StoreError> {
 ///
 /// Phase 6 fuzzes this format, and `docs/design.md` D24 is the reason it cannot
 /// do so through [`load`] alone. The checksum sits in front of every structural
-/// check in [`decode`], so a fuzzer mutating a snapshot spends its whole budget
+/// check in `decode`, so a fuzzer mutating a snapshot spends its whole budget
 /// bouncing off `ChecksumMismatch` and reports a clean run having reached none
 /// of the parser. D24 records three Phase 3 tests that passed exactly that way.
 ///
 /// A fuzz target therefore mutates the payload, **recomputes a valid checksum
-/// over it** with [`store_checksum`](zutreexo_accumulator::hash::store_checksum),
+/// over it** with [`zutreexo_accumulator::hash::store_checksum`],
 /// and calls this. Going through a temp file per iteration would work and would
 /// be far too slow to reach the interesting states.
 ///

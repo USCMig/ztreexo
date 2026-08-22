@@ -214,3 +214,85 @@ fn rate_limiting_refuses_a_flood_but_still_answers() {
         "every connection must get a reply, refused or not"
     );
 }
+
+#[test]
+fn a_response_over_the_cap_is_refused_rather_than_sent() {
+    // The cap is on *our* output, and it exists so the single serving thread
+    // is never spent on a response nobody bounded. Exercised with an absurdly
+    // small cap, because the honest alternative — building a response larger
+    // than 8 MB — would need tip state and minutes of setup to test one branch.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let bridge = bridge();
+
+    let limits = Limits {
+        max_response_bytes: 4,
+        ..Limits::permissive()
+    };
+
+    let body = Request::AccumulatorRoots.to_bytes();
+    let mut client = TcpStream::connect(address).unwrap();
+    let request = format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", body.len());
+    client.write_all(request.as_bytes()).unwrap();
+    client.write_all(&body).unwrap();
+    client.flush().unwrap();
+
+    let (mut stream, _) = listener.accept().unwrap();
+    serve_once_with(&bridge, &mut stream, &limits).unwrap();
+
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut response = Vec::new();
+    let _ = client.read_to_end(&mut response);
+
+    // The status byte is the last thing in the header block; a refused
+    // oversized response carries INTERNAL and an empty payload.
+    let at = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("no header terminator");
+    assert_eq!(
+        response[at + 4],
+        zutreexo_bridge::wire::status::INTERNAL,
+        "an over-cap response was sent rather than refused"
+    );
+    assert_eq!(
+        response.len() - (at + 4),
+        1,
+        "the refused response carried a payload"
+    );
+}
+
+#[test]
+fn the_default_wrappers_serve_a_request() {
+    // `serve_once` and `serve` apply Limits::default(). Covered explicitly
+    // because every other test here passes limits by hand, and a default that
+    // silently broke would be invisible to all of them — while being the entry
+    // point everything outside the tests actually calls.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let bridge = bridge();
+
+    let handle = std::thread::spawn(move || {
+        let body = Request::AccumulatorRoots.to_bytes();
+        let mut client = TcpStream::connect(address).unwrap();
+        let request = format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", body.len());
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(&body).unwrap();
+        client.flush().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut response = Vec::new();
+        let _ = client.read_to_end(&mut response);
+        response
+    });
+
+    // Both default wrappers, not just `serve`: `serve_once` is the entry point
+    // a caller with its own accept loop uses, and nothing else here reaches it.
+    let (mut stream, _) = listener.accept().unwrap();
+    zutreexo_bridge::server::serve_once(&bridge, &mut stream).unwrap();
+    let response = handle.join().unwrap();
+    assert!(!response.is_empty(), "the default wrapper served nothing");
+}
