@@ -115,3 +115,4 @@ INFO: seed corpus: files: 71 min: 1b max: 1129b total: 10361b rss: 57Mb
 #279127990	REDUCE cov: 323 ft: 945 corp: 67/11406b lim: 4096 exec/s: 19197 rss: 449Mb L: 1182/1312 MS: 4 ChangeBit-InsertByte-ChangeBinInt-EraseBytes-
 #536870912	pulse  cov: 323 ft: 945 corp: 67/11406b lim: 4096 exec/s: 19015 rss: 450Mb
 #698400125	REDUCE cov: 323 ft: 945 corp: 67/11310b lim: 4096 exec/s: 19220 rss: 450Mb L: 701/1312 MS: 5 EraseBytes-CopyPart-CopyPart-PersAutoDict-EraseBytes- DE: "\023\000\000\000"-
+#1073741824	pulse  cov: 323 ft: 945 corp: 67/11310b lim: 4096 exec/s: 18984 rss: 450Mb

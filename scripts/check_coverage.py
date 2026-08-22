@@ -392,7 +392,36 @@ def unexercised(summary: dict) -> bool:
     return True
 
 
+def _assert_no_duplicate_floors() -> None:
+    """Fail loudly if a path is listed twice in FLOORS.
+
+    A duplicate key in a Python dict literal is not an error: the last one
+    silently wins. That is exactly what happened on 2026-08-22 — `gap_cost.rs`
+    was already registered as never-measured and a second, identical entry was
+    added below it. Nothing complained, and the only reason it was noticed was
+    an unrelated grep.
+
+    The failure mode is worse than untidiness. A later entry with *different*
+    floors would silently replace the earlier one, quietly lowering a gate that
+    still looked present in the file.
+    """
+    import ast
+
+    with open(__file__, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        seen: set[str] = set()
+        for key in keys:
+            if key in seen:
+                raise SystemExit(f"check_coverage.py lists {key!r} twice; the second entry silently wins")
+            seen.add(key)
+
+
 def main(argv: list[str]) -> int:
+    _assert_no_duplicate_floors()
     if len(argv) != 2:
         print(f"usage: {argv[0]} <llvm-cov-export.json>", file=sys.stderr)
         return 2

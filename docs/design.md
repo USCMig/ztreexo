@@ -942,9 +942,18 @@ more than an order of magnitude in block size and composition.
 
 So every bandwidth or composition figure in `docs/benchmarks.md` names its
 height range, and any that cannot be reproduced in at least two eras is
-provisional. The same caution applies to Phase 5a's headline gap-length result,
-which was measured at tip and should be re-checked against an earlier era before
-it is relied on.
+provisional.
+
+**Phase 5a's headline was re-checked on 2026-08-22 and survives** — unlike the
+figure that prompted this entry. Measured over 1,000,000–1,400,000 (Sapling era,
+0.7 nullifiers per block) instead of at tip (3.4), the advantage falls from
+31,705× to 13,201× for a one-note wallet and the crossover moves from 13 blocks
+to 30. Smaller by about 2.4×, in the same direction, for the obvious reason:
+scanning is linear in nullifiers revealed and a proof is not.
+
+That is the distinction worth keeping. D32's 73.0% *inverted* between eras; this
+one only changes scale. A result that moves by a factor is era-dependent and
+must name its range; a result that changes sign was never a result.
 
 ---
 

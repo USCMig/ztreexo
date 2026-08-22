@@ -699,6 +699,44 @@ today. Framing B — "how long does my wallet take to sync" — is essentially
 unaffected, and any presentation of these numbers that quotes the 31,705×
 without saying so is choosing the flattering question.
 
+### Re-measured in an earlier era, 2026-08-22
+
+[D32](design.md) concluded that a figure measured over one slice of chain
+history is not a property of the design, after Phase 4b's 73.0%
+transparent-bandwidth share turned out to describe 2011 and inverted when
+measured anywhere else. Its closing note flagged this result as needing the
+same check, since it was taken over the most recent 400,001 blocks only.
+
+Checked. `gap_cost` now takes `ZUTREEXO_GAP_END`, so any era can be sampled.
+
+| 400,000-block window | nullifiers/block | share of a compact sync | 1 note | 10 notes | 100 notes |
+|---|---|---|---|---|---|
+| **1,000,000–1,400,000** (Sapling era, pre-NU5) | 0.7 | 7.0% | 13,201× | 1,320× | 132× |
+| **3,054,402–3,454,402** (tip, the original) | 3.4 | 14.7% | 31,705× | 3,170× | 317× |
+
+Crossovers move with it:
+
+| wallet | pre-NU5 | at tip |
+|---|---|---|
+| 1 note | 30 blocks (~0.6 h) | 13 blocks (~16 min) |
+| 10 notes | 303 blocks (~6.3 h) | 126 blocks (~2.6 h) |
+| 100 notes | 3,030 blocks (~63 h) | 1,262 blocks (~26 h) |
+
+**The direction survives; the magnitude does not.** Pre-NU5 the advantage is
+about 2.4× smaller and the crossovers about 2.4× further out, because shielded
+activity was that much thinner — 0.7 nullifiers per block against 3.4. That
+ratio is the whole difference: scanning cost is linear in nullifiers revealed,
+and a proof costs the same either way.
+
+So unlike D32's case this is **not** an inversion. The claim CLAUDE.md set out
+to test holds in both eras, and a wallet offline more than a few days is better
+off with proofs in either. What changes is how much better, and any single
+number quoted without its height range is overstating one era's arithmetic —
+which is exactly what D32 was written about.
+
+Read alongside D35: the direction holding does not make the query one a
+privacy-conscious wallet can make.
+
 ### The trust caveat, which is not a footnote
 
 A non-membership proof is only meaningful against a **trusted root**, and
