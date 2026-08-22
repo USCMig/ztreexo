@@ -323,8 +323,15 @@ rule 5).
 against a synced zebrad at tip 3,452,735.
 
 **All 3,452,736 blocks applied from genesis with zero errors.** 7h02m wall
-clock, peak RSS 32.7 GiB. 71 from-scratch root rebuilds, all matching the
+clock, RSS 32.7 GiB at tip. 71 from-scratch root rebuilds, all matching the
 incremental roots.
+
+> **Corrected 2026-08-22.** This read "peak RSS 32.7 GiB". It was the *final*
+> `VmRSS`, not a peak — the binary was reading the wrong field and the table
+> below already contradicted it at height 2,700,000. Phase 5b re-ran the same
+> replay reading `VmHWM` and measured a true peak of **40.6 GiB**, 24% higher.
+> The 32.7 GiB figure reproduced exactly as the final `VmRSS`, which is how the
+> mistake was identified rather than merely suspected.
 
 That satisfies the amended Phase 2 definition of done. It is a substantive
 claim rather than an absence of evidence: the IMT rejects duplicate nullifiers
@@ -704,6 +711,145 @@ every crossover above: a 100-note wallet would break even at roughly 585 blocks
 instead of 1,262. Unlike the Phase 4a case — where the compressible term was
 only 16.4% of the bundle and the Utreexo proofs dominated — here the proof *is*
 the whole cost, so the optimisation is worth its full 53.7%.
+
+---
+
+## Phase 5b — storage, latency, and a shadow at the live tip, 2026-08-22
+
+Three runs, chained overnight by `scripts/phase5b_overnight.sh` and
+`scripts/phase5b_after_replay.sh` against a synced `zebrad` 6.3.0:
+
+1. genesis to tip, snapshotting at 1,700,000 and at tip — **7h09m**, 3,455,225
+   blocks, zero apply errors;
+2. bridge/compact-node lockstep over **60,000 blocks** of the sandblasting ramp
+   (1,700,000–1,760,000), resumed from the 1.7M snapshot so the transparent
+   forest is real — **88 min**, zero divergences;
+3. shadowing the live tip — **12h39m**, **500 blocks followed at tip** plus 521
+   of catch-up, **zero divergences, zero parse disagreements**.
+
+### The storage side, which had never been measured
+
+CLAUDE.md Phase 5 asks for "peak RSS and steady-state disk for a validating
+node", to be weighed against the proof bandwidth. Until Phase 5b there was no
+figure at all, because a compact node's state had only ever lived in memory and
+nothing serialised it.
+
+| | bridge (full state) | compact node |
+|---|---|---|
+| steady resident at tip | **31.7 GiB** | 693 B |
+| peak resident, tip-following | **37.5 GiB** | — |
+| peak resident, genesis replay | **40.6 GiB** | — |
+| on disk | 6.25 GB snapshot | **469–789 B** |
+| reorg history, 512 blocks | forest + outpoint index | **324 KB** |
+
+**Roughly 49 million to one** at the observed 693 B, and it does not grow with
+the chain: the state is roots and counters, so its size varies only with the
+number of perfect trees in the forest — which is why it moved between 469 and
+789 bytes over 1,021 consecutive blocks rather than climbing.
+
+### A correction: peak RSS was understated
+
+The genesis replay reported **peak 40.6 GiB (`VmHWM`)** against the **32.7 GiB**
+published for stage 2d — **24% higher**. The old line read `VmRSS`, the
+*current* resident size, at the end of the run, and labelled it "peak"; this
+run's final `VmRSS` was 32.7 GiB, reproducing the published figure exactly and
+confirming that is what it had always been measuring.
+
+Stage 2d's own table already contradicted it, showing 33.3 GiB at height
+2,700,000 against the 32.7 GiB printed at tip — a peak cannot be below a value
+the same run logged earlier. The binary now reads `VmHWM`.
+
+Stage 2d's other numbers reproduced exactly at every shared checkpoint —
+28,203,068 unspent outputs at 300,000, 21,180,838 and Orchard 296 at 1,700,000 —
+which is a determinism check nobody had to write.
+
+### Per-block validation latency
+
+CLAUDE.md Phase 5 asks for p50 and p99. Reported as quantiles because stage 2d
+measured a 165× throughput spread across mainnet history and concluded a mean
+"understates the p99 a node must survive by more than two orders of magnitude".
+
+**Sandblasting ramp, 60,000 blocks (heights 1,700,000–1,760,000):**
+
+| | p50 | p99 | max | mean |
+|---|---|---|---|---|
+| bridge apply + prove | 0.265 ms | 14.990 ms | 93.757 ms | 1.094 ms |
+| bundle encode + decode | 0.022 ms | 0.428 ms | 2.414 ms | 0.041 ms |
+| **compact node verify** | **0.164 ms** | **10.781 ms** | **29.724 ms** | 0.750 ms |
+
+**Live tip, 1,021 blocks (heights 3,455,225–3,456,245):**
+
+| | p50 | p99 | max |
+|---|---|---|---|
+| bridge apply + prove | 0.453 ms | 4.835 ms | 32.684 ms |
+| **compact node verify** | **0.267 ms** | **2.648 ms** | **19.537 ms** |
+
+The compact node is **1.7× cheaper at p50 and 1.8× at p99** at tip, and 1.6×/1.4×
+across the sandblasting ramp. Modest — and it should be read as modest. The
+compact node still verifies a proof per spend and per nullifier; what it saves is
+holding the set, not the arithmetic over it. The tail matters more than the
+median either way: p99 is 11× p50 at tip and 57× across the ramp.
+
+### The finding that changes the narrow-or-keep argument
+
+**Proof overhead depends overwhelmingly on which era you measure, and the
+composition inverts.**
+
+| measured over | proof overhead | Utreexo share | nullifier share |
+|---|---|---|---|
+| heights 0–150,000 (Phase 4b) | **152.6%** | **73.0%** | ~27% |
+| heights 1.70M–1.76M (sandblasting) | **8.3%** | **9.5%** | **87.1%** |
+| live tip, 1,021 blocks | **38.4%** | — | — |
+
+Phase 4a and 4b measured heights 0–150,000 and found 73.0% of bundle bytes in
+Utreexo inclusion proofs, rising with height. `PLAN.md` recorded that as the
+third of three independent signals that the transparent forest should be
+dropped.
+
+**That reading does not survive being measured anywhere else.** Early blocks are
+tiny and almost purely transparent, so proofs dominate them; a sandblasted block
+averages 471 KB and the whole bundle is 8.3% of it. On the modern chain the
+Utreexo proofs are under a tenth of a bundle and the nullifier proofs are seven
+eighths of it.
+
+So the transparent forest is **not** where the bandwidth goes, and the case for
+dropping it is much weaker than Phase 4b made it look. The earlier figure was
+not wrong; it was a measurement of 2011, presented as a property of the design.
+
+Sparse paths (D28) saved 60.2% of nullifier proof bytes over the ramp, against
+68.6% measured at heights 0–20,000.
+
+### Shadow mode: what it did and did not establish
+
+500 blocks followed at the live tip, plus 521 of catch-up, over 12h39m. Every
+block applied through both paths and the roots compared byte for byte; every
+block's parse compared against `zebrad`'s own JSON, field for field. **Zero
+divergences, zero parse disagreements, zero errors of any kind across 1,021
+blocks.**
+
+**Zero reorgs occurred.** That was the expected outcome for a window this size
+and it is stated plainly rather than left to be inferred from a clean summary:
+the composed reorg path in `shadow.rs` — find the fork, reload the bridge
+snapshot, replay the common prefix, restore the compact state — **has still
+never run against a real fork.** Its parts are tested (`shadow_fork.rs`,
+`zutreexo-csn/tests/reorg.rs`); their composition is not. See `PLAN.md`.
+
+The run is also an external shadow rather than a flag inside Zebra, which is
+narrower than CLAUDE.md Phase 5's wording asks for. `docs/design.md` D30 records
+why.
+
+### A measurement bug found in the run's own output
+
+The per-block JSONL logged `began_bridge.elapsed()` a second time at write
+time, which measures from the start instant to *now* rather than the duration
+that was recorded — so it captured bridge-apply plus the codec plus the compact
+verify plus the root comparisons. It inflated the bridge p50 by 82%, the p99 by
+57%, and the max from 33 ms to 53 ms. The in-memory summary was correct
+throughout, and the tables above use it.
+
+It was caught by the two disagreeing. A single source would have published the
+inflated figures, and they flattered the design — the compact node looked 2.4×
+cheaper at p50 rather than 1.7×.
 
 ---
 

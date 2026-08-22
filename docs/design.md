@@ -897,6 +897,57 @@ applies to the *nullifier* side as much as the transparent one.
 
 ---
 
+## D32 — Keep the transparent forest; the case against it was one era's arithmetic
+
+**Phase 5b.** Reverses a direction three earlier measurements appeared to
+establish, and the reversal matters more as a lesson than as a decision.
+
+CLAUDE.md Phase 5 anticipates narrowing: *"If the measurements say that, narrow
+the project to the nullifier accumulator and drop the transparent forest rather
+than shipping both out of sunk cost."* Phase 4a and 4b appeared to say it —
+73.0% of proof bandwidth in Utreexo inclusion proofs, overhead climbing from
+100.9% at height 25,000 to 170.5% at 150,000 — and `PLAN.md` recorded the
+evidence as "three-deep".
+
+Every one of those numbers came from heights 0–150,000, because that is the only
+range a compact-node replay could reach before Phase 5b made it possible to
+resume from a snapshot. Measured elsewhere:
+
+| measured over | proof overhead | Utreexo share | nullifier share |
+|---|---|---|---|
+| heights 0–150,000 | 152.6% | **73.0%** | ~27% |
+| heights 1.70M–1.76M | 8.3% | **9.5%** | **87.1%** |
+| live tip | 38.4% | — | — |
+
+2011 blocks are tiny and almost purely transparent, so proofs dominate them. A
+sandblasted block averages 471 KB and the whole bundle is 8.3% of it. On the
+modern chain, Utreexo proofs are under a tenth of a bundle and nullifier proofs
+are seven eighths.
+
+Of the three signals: 27.5M transparent outputs at tip stands; 73.0% of
+bandwidth is withdrawn; and "overhead rises with height" is contradicted
+outright, since tip overhead is 38.4% against 152.6% early.
+
+**Decision: keep both accumulators.** Narrowing would have dropped the cheap
+half and kept the expensive one.
+
+### The lesson, which is the durable part
+
+**A figure measured over one slice of chain history is not a property of the
+design.** The 73.0% was never wrong — it was a property of 2011 presented as a
+property of Utreexo, and it came within one phase of deciding what this project
+ships. Zcash's history is not homogeneous: it has a transparent-only era, a
+Sapling era, a sandblasting era, and a post-Ironwood era, and they differ by
+more than an order of magnitude in block size and composition.
+
+So every bandwidth or composition figure in `docs/benchmarks.md` names its
+height range, and any that cannot be reproduced in at least two eras is
+provisional. The same caution applies to Phase 5a's headline gap-length result,
+which was measured at tip and should be re-checked against an earlier era before
+it is relied on.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage

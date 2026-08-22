@@ -408,7 +408,14 @@ fn main() -> std::process::ExitCode {
         // ---- both sides apply ----
         let began_bridge = Instant::now();
         let applied = apply_and_prove(&mut bridge, &summary, ApplyOptions::default());
-        bridge_latency.record(began_bridge.elapsed());
+        // Held in a variable rather than re-read later. Calling `elapsed()` a
+        // second time at log time measures from the same start instant to
+        // *now*, so the JSONL was recording bridge-apply plus the codec plus
+        // the compact verify plus the root comparisons — inflating the bridge
+        // p99 by roughly 60% and its max from 33 ms to 53 ms against the
+        // in-memory summary, which was right all along.
+        let bridge_took = began_bridge.elapsed();
+        bridge_latency.record(bridge_took);
 
         let (_outcome, bundle) = match applied {
             Ok(pair) => pair,
@@ -429,7 +436,8 @@ fn main() -> std::process::ExitCode {
 
         let began_csn = Instant::now();
         let verified = csn.apply_bundle(&summary, &received);
-        csn_latency.record(began_csn.elapsed());
+        let csn_took = began_csn.elapsed();
+        csn_latency.record(csn_took);
 
         if let Err(error) = verified {
             eprintln!("\nCOMPACT NODE REJECTED BLOCK {next}: {error}");
@@ -482,8 +490,8 @@ fn main() -> std::process::ExitCode {
                 encoded.len(),
                 raw.len(),
                 state_bytes,
-                began_bridge.elapsed().as_micros(),
-                began_csn.elapsed().as_micros(),
+                bridge_took.as_micros(),
+                csn_took.as_micros(),
             );
         }
     }

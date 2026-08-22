@@ -301,11 +301,23 @@ fn main() {
         accumulate(&mut totals, &raw, &bundle, &encoded, depth);
 
         if report_every > 0 && height % report_every == 0 && height > start {
-            report(&totals, height, began.elapsed().as_secs_f64(), false);
+            report(
+                &totals,
+                height,
+                began.elapsed().as_secs_f64(),
+                false,
+                measure_batching,
+            );
         }
     }
 
-    report(&totals, end, began.elapsed().as_secs_f64(), true);
+    report(
+        &totals,
+        end,
+        began.elapsed().as_secs_f64(),
+        true,
+        measure_batching,
+    );
 }
 
 /// Sum of one-proof-per-input encoded sizes, or `None` when the block has
@@ -374,7 +386,7 @@ fn accumulate(
     }
 }
 
-fn report(totals: &Totals, height: u32, elapsed: f64, final_report: bool) {
+fn report(totals: &Totals, height: u32, elapsed: f64, final_report: bool, measure_batching: bool) {
     let blocks = totals.blocks.max(1);
     let overhead = if totals.block_bytes == 0 {
         0.0
@@ -499,7 +511,14 @@ fn report(totals: &Totals, height: u32, elapsed: f64, final_report: bool) {
         println!("  one proof per input {:>12} B", totals.unbatched_bytes);
         println!("  one batched proof   {:>12} B", totals.batched_bytes);
         println!("  saving              {saving:>12.1}%");
-    } else {
+    } else if measure_batching {
         println!("\nbatching: no block in this range had two or more provable inputs.");
+    } else {
+        // These are different statements and the first version printed the
+        // wrong one. A 60,000-block sandblasting run with 1,018,998 spends
+        // ended with "no block had two or more provable inputs", which is not
+        // merely unhelpful — it is false, and it is the second measurement bug
+        // in this binary caused by reporting a number nobody computed.
+        println!("\nbatching: not measured (set ZUTREEXO_MEASURE_BATCHING=1; it roughly doubles the run).");
     }
 }
