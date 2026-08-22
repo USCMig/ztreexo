@@ -1,0 +1,8 @@
+[2026-08-22T05:43:57+00:00] building 5 targets
+[2026-08-22T05:43:59+00:00] built
+[2026-08-22T05:43:59+00:00] launching bundle_decode for 259200s
+[2026-08-22T05:43:59+00:00] launching utxo_proof_decode for 259200s
+[2026-08-22T05:43:59+00:00] launching compact_state_decode for 259200s
+[2026-08-22T05:43:59+00:00] launching wire_request_decode for 259200s
+[2026-08-22T05:43:59+00:00] launching nonmembership_decode for 259200s
+[2026-08-22T05:43:59+00:00] all launched; waiting

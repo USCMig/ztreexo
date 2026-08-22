@@ -402,6 +402,28 @@ pub fn save(state: &ChainAccumulators, path: &Path) -> Result<(), StoreError> {
 /// Reads a snapshot, verifying magic, version and checksum before use.
 pub fn load(path: &Path) -> Result<ChainAccumulators, StoreError> {
     let bytes = std::fs::read(path).map_err(|e| io_error(path, &e))?;
+    load_bytes(&bytes)
+}
+
+/// The same, over bytes already in memory.
+///
+/// # Why this is public
+///
+/// Phase 6 fuzzes this format, and `docs/design.md` D24 is the reason it cannot
+/// do so through [`load`] alone. The checksum sits in front of every structural
+/// check in [`decode`], so a fuzzer mutating a snapshot spends its whole budget
+/// bouncing off `ChecksumMismatch` and reports a clean run having reached none
+/// of the parser. D24 records three Phase 3 tests that passed exactly that way.
+///
+/// A fuzz target therefore mutates the payload, **recomputes a valid checksum
+/// over it** with [`store_checksum`](zutreexo_accumulator::hash::store_checksum),
+/// and calls this. Going through a temp file per iteration would work and would
+/// be far too slow to reach the interesting states.
+///
+/// This is not a weaker entry point: it performs the identical magic, checksum
+/// and version checks that [`load`] does, because [`load`] is now a thin
+/// wrapper over it.
+pub fn load_bytes(bytes: &[u8]) -> Result<ChainAccumulators, StoreError> {
     let split = bytes
         .len()
         .checked_sub(HASH_LEN)

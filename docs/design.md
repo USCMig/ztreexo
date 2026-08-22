@@ -948,6 +948,59 @@ it is relied on.
 
 ---
 
+## D33 — `MemForest::deserialize` panics on malformed input; contained, not fixed
+
+**Phase 6.** Found by the fuzzer in under 3,000 executions, twenty-five bytes
+long, and reachable from a file on disk.
+
+`MemForest::deserialize` reads an eight-byte node-type field and does
+`_ => panic!("Invalid node type")` (`mem_forest/mod.rs:144`) rather than
+returning the `io::Result` its signature promises. Identical in crates.io 0.6.0
+and in our pinned fork.
+
+The reproducer is `0a00007e7e000000000a000000000000000a00000000000000`.
+
+**Why it matters more than a library nit.** `UtxoForest::from_bytes` is called
+by `store::decode`, so a corrupt or hostile *snapshot file* takes the process
+down. The `snapshot_decode` fuzz target reaches the identical panic through
+`load_bytes`. CLAUDE.md §5 rule 3 forbids exactly this — "a panic in block
+application is a remote crash vector" — and the rule binds our wrapper whether
+or not the panicking line is ours.
+
+### Contained at our boundary
+
+`UtxoForest::from_bytes` wraps the call in `catch_unwind` and returns
+`UtreexoError::Snapshot`, the same error a clean parse failure gives, because to
+a caller they are the same event: these bytes are not a forest.
+
+**Two honest costs of doing it this way.**
+
+First, it is containment and not a repair. The real fix belongs in the fork
+([D25](#d25--the-rustreexo-d10-blocker-is-fixed-and-the-fix-is-pinned-to-a-fork))
+and upstream after that — three lines, turning the `panic!` into an
+`io::Error::new(InvalidData, ...)`, exactly as our own `ZcashNodeHash::read`
+already does for an unknown tag ([D19](#d19--zcashnodehash-serialisation-must-be-tagged)).
+
+Second, and worse: **`catch_unwind` blinds the fuzzer to every other panic in
+that deserialiser**, because they all become `Err` now. That is a real loss of
+signal, and it is the strongest argument for fixing upstream rather than
+leaving the wrapper in place indefinitely.
+
+### Consequence for the 72-hour run
+
+`libfuzzer-sys` installs a panic hook that aborts the process *before*
+unwinding, so the containment is invisible under the fuzzer and both
+forest-reaching targets still die within seconds. They are excluded from the
+72-hour run — including them would spend three days re-finding one known bug —
+and go back in when the pinned revision returns an error.
+
+The regression test is written against the public behaviour ("this returns an
+error"), not against the panic, so it keeps passing unchanged once the fork is
+fixed and the `catch_unwind` comes out. A test asserting a panic would have to
+be rewritten by whoever fixed it, which is how a seed gets quietly deleted.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage

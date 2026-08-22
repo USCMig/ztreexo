@@ -42,5 +42,5 @@ pub use pool::{ChainAccumulators, StateCounts};
 pub use rollback::{
     RollbackError, RollbackJournal, DEFAULT_MAX_ROLLBACK_DEPTH, DEFAULT_SNAPSHOT_INTERVAL,
 };
-pub use store::{load, save, StoreError, MAGIC, STORE_VERSION};
+pub use store::{load, load_bytes, save, StoreError, MAGIC, STORE_VERSION};
 pub use zutreexo_accumulator::PoolId;

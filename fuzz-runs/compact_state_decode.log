@@ -1,0 +1,44 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.28s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/compact_state_decode -artifact_prefix=/home/blocknodes/ztreexo/fuzz/artifacts/compact_state_decode/ -max_total_time=259200 -rss_limit_mb=4096 -print_final_stats=1 /home/blocknodes/ztreexo/fuzz/corpus/compact_state_decode`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3570256128
+INFO: Loaded 1 modules   (1810 inline 8-bit counters): 1810 [0x617c2f72d5d0, 0x617c2f72dce2), 
+INFO: Loaded 1 PC tables (1810 PCs): 1810 [0x617c2f72dce8,0x617c2f734e08), 
+INFO:       61 files found in /home/blocknodes/ztreexo/fuzz/corpus/compact_state_decode
+INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes
+INFO: seed corpus: files: 61 min: 1b max: 558b total: 6747b rss: 57Mb
+#62	INITED cov: 301 ft: 640 corp: 57/5216b exec/s: 0 rss: 57Mb
+#519126	REDUCE cov: 301 ft: 640 corp: 57/5215b lim: 4096 exec/s: 259563 rss: 405Mb L: 182/557 MS: 4 ShuffleBytes-ChangeBit-CMP-EraseBytes- DE: "\377\377"-
+#524288	pulse  cov: 301 ft: 640 corp: 57/5215b lim: 4096 exec/s: 262144 rss: 408Mb
+#1048576	pulse  cov: 301 ft: 640 corp: 57/5215b lim: 4096 exec/s: 262144 rss: 447Mb
+#2008941	REDUCE cov: 301 ft: 640 corp: 57/5211b lim: 4096 exec/s: 286991 rss: 449Mb L: 109/557 MS: 4 CMP-ChangeBit-EraseBytes-ShuffleBytes- DE: "\000\000\000\000\000\000\000\002"-
+#2097152	pulse  cov: 301 ft: 640 corp: 57/5211b lim: 4096 exec/s: 262144 rss: 449Mb
+#3052688	REDUCE cov: 301 ft: 640 corp: 57/5210b lim: 4096 exec/s: 234822 rss: 450Mb L: 55/557 MS: 2 ChangeBinInt-EraseBytes-
+#3779110	REDUCE cov: 301 ft: 640 corp: 57/5209b lim: 4096 exec/s: 236194 rss: 451Mb L: 79/557 MS: 2 CrossOver-EraseBytes-
+#4194304	pulse  cov: 301 ft: 640 corp: 57/5209b lim: 4096 exec/s: 246723 rss: 451Mb
+#6534827	REDUCE cov: 301 ft: 640 corp: 57/5177b lim: 4096 exec/s: 242030 rss: 451Mb L: 86/557 MS: 2 ChangeBinInt-EraseBytes-
+#6811953	REDUCE cov: 301 ft: 640 corp: 57/5173b lim: 4096 exec/s: 243284 rss: 451Mb L: 178/557 MS: 1 EraseBytes-
+#7867805	REDUCE cov: 301 ft: 640 corp: 57/5172b lim: 4096 exec/s: 245868 rss: 453Mb L: 78/557 MS: 2 PersAutoDict-EraseBytes- DE: "\377\377"-
+#8388608	pulse  cov: 301 ft: 640 corp: 57/5172b lim: 4096 exec/s: 246723 rss: 453Mb
+#9219982	NEW    cov: 301 ft: 642 corp: 58/5793b lim: 4096 exec/s: 242631 rss: 453Mb L: 621/621 MS: 2 ChangeBit-InsertRepeatedBytes-
+#12945434	NEW    cov: 301 ft: 644 corp: 59/6510b lim: 4096 exec/s: 253832 rss: 514Mb L: 717/717 MS: 2 ShuffleBytes-InsertRepeatedBytes-
+#13288233	REDUCE cov: 301 ft: 644 corp: 59/6492b lim: 4096 exec/s: 250721 rss: 514Mb L: 156/717 MS: 4 InsertRepeatedBytes-CrossOver-ChangeBinInt-EraseBytes-
+#13299398	REDUCE cov: 301 ft: 644 corp: 59/6481b lim: 4096 exec/s: 250932 rss: 514Mb L: 145/717 MS: 5 EraseBytes-InsertByte-ShuffleBytes-PersAutoDict-CMP- DE: "\377\377"-"\377\377\377\377"-
+#13306550	REDUCE cov: 301 ft: 644 corp: 59/6478b lim: 4096 exec/s: 251066 rss: 514Mb L: 142/717 MS: 2 ChangeByte-EraseBytes-
+#16777216	pulse  cov: 301 ft: 644 corp: 59/6478b lim: 4096 exec/s: 254200 rss: 514Mb
+#25142459	REDUCE cov: 301 ft: 644 corp: 59/6474b lim: 4096 exec/s: 253964 rss: 514Mb L: 136/717 MS: 4 PersAutoDict-CopyPart-EraseBytes-PersAutoDict- DE: "\377\377"-"\377\377"-
+#33554432	pulse  cov: 301 ft: 644 corp: 59/6474b lim: 4096 exec/s: 234646 rss: 514Mb
