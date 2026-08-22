@@ -1001,6 +1001,76 @@ be rewritten by whoever fixed it, which is how a seed gets quietly deleted.
 
 ---
 
+## D34 — The DoS scenario CLAUDE.md names is the mild one
+
+**Phase 6.** Measured against real tip state (`crates/zutreexo-testkit/src/bin/dos_cost.rs`),
+27,522,884 unspent outputs.
+
+CLAUDE.md Phase 6 asks for "cost to a bridge node of a peer requesting proofs
+for every UTXO". Measured, that scenario is **not** the one to worry about, and
+two others are.
+
+### The named scenario: 193 seconds
+
+| | p50 | p99 | mean | size |
+|---|---|---|---|---|
+| transparent inclusion proof | 0.008 ms | 0.011 ms | 0.007 ms | 809 B |
+| nullifier non-membership proof | 0.009 ms | 0.021 ms | 0.010 ms | 775 B |
+
+Proving **every** UTXO in the set is 193 s of CPU and 22.28 GB served. Three
+minutes. Nullifier proofs are flat in set size — `O(depth)`, not `O(log n)` —
+so 54.1M nullifiers cost no more each than 70,000 did.
+
+CPU is not the constraint. Rate limiting bounds it anyway: at the default 600
+requests per minute, walking the whole set takes an attacker **765 hours of
+requests the bridge was willing to answer**.
+
+### The first real one: slowloris, and it is total
+
+The bridge is single-threaded by construction —
+[D27](#d27--the-bridge-speaks-binary-over-http-not-grpc) — so serving is one
+queue. A client that connects and sends one byte of an HTTP header, then
+nothing, parked the only serving thread in `read()` **indefinitely**, for every
+other client, from one socket carrying no traffic and costing no CPU.
+
+Against a threaded server slowloris degrades throughput. Against this one it was
+complete denial from a single connection, and it cost the attacker nothing.
+
+Fixed: socket read/write timeouts, plus a **total request deadline**, because a
+per-read timeout alone is insufficient — a client can send one byte just inside
+every deadline forever. `crates/zutreexo-bridge/tests/dos.rs` proves both, and
+carries the control showing a complete request is still served, since a server
+that refuses everything would pass a timeout test too. Removing the timeout
+makes the test hang rather than fail, which was verified.
+
+### The second: amplification
+
+Request and response are wildly asymmetric.
+
+| request | bytes in | bytes out | ratio |
+|---|---|---|---|
+| non-membership proof | 35 | 775 | **22×** |
+| block proof bundle (mean at tip) | 6 | 18,889 | **3,148×** |
+| block proof bundle (largest seen) | 6 | 87,577 | **14,596×** |
+
+A six-byte request returning 87 KB is a reflector. Even *within* the rate limit,
+600 bundle requests a minute is 0.7 GB/h of egress driven by 0.22 MB/h of
+ingress.
+
+**A proof-size cap does not help**, which is worth stating because CLAUDE.md
+proposes one: every individual proof is small and legitimate; the asymmetry is
+inherent to the service. The defences that do apply are rate limiting by
+*bytes served* rather than by request count, and not exposing the bridge
+publicly — which remains the standing advice.
+
+### What is still not addressed
+
+No TLS, no authentication, no per-connection byte accounting. These limits make
+a bridge survivable on a trusted network; they do not make it safe on a hostile
+one. Bind it to loopback.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage

@@ -16,10 +16,12 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::time::Instant;
 
 use zutreexo_accumulator::proof::{CanonicalSerialize, NonMembershipResponse};
 use zutreexo_chain::BlockProofBundle;
 
+use crate::limits::{Limits, RateLimiter};
 use crate::wire::{status, Request, Roots};
 use crate::Bridge;
 
@@ -29,7 +31,24 @@ use crate::Bridge;
 /// with [`status::BAD_REQUEST`] rather than dropped, because a client that gets
 /// no reply cannot tell a malformed request from a hung bridge.
 pub fn serve_once(bridge: &Bridge, stream: &mut TcpStream) -> std::io::Result<()> {
-    let body = match read_request(stream) {
+    serve_once_with(bridge, stream, &Limits::default())
+}
+
+/// Serves one request under explicit limits.
+///
+/// The timeouts are applied to the socket here rather than by the caller,
+/// because a connection that reaches this function unbounded is already the
+/// problem: `read_request` will block in `read()` and, on a single-threaded
+/// bridge, that is every client's problem at once.
+pub fn serve_once_with(
+    bridge: &Bridge,
+    stream: &mut TcpStream,
+    limits: &Limits,
+) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(limits.read_timeout))?;
+    stream.set_write_timeout(Some(limits.write_timeout))?;
+
+    let body = match read_request(stream, limits) {
         Ok(body) => body,
         Err(error) => {
             write_response(stream, status::BAD_REQUEST, &[])?;
@@ -53,6 +72,13 @@ pub fn serve_once(bridge: &Bridge, stream: &mut TcpStream) -> std::io::Result<()
         }
     };
 
+    // A cap on our own output. Refusing to send is better than spending the
+    // only serving thread on a response nobody asked to be this large; the
+    // client learns the request was refused rather than waiting on a stall.
+    if payload.len() > limits.max_response_bytes {
+        return write_response(stream, status::INTERNAL, &[]);
+    }
+
     write_response(stream, code, &payload)
 }
 
@@ -61,16 +87,39 @@ pub fn serve_once(bridge: &Bridge, stream: &mut TcpStream) -> std::io::Result<()
 /// Single-threaded and sequential. Adequate for a test or a local sidecar;
 /// see the module docs before pointing it at anything else.
 pub fn serve(bridge: &Bridge, listener: &TcpListener, limit: usize) -> std::io::Result<()> {
+    serve_with(bridge, listener, limit, &Limits::default())
+}
+
+/// The same, under explicit limits and with per-address rate limiting.
+///
+/// A refused peer is answered with [`status::BAD_REQUEST`] and the connection
+/// closed, rather than dropped silently: a client that gets no reply cannot
+/// distinguish being rate-limited from a bridge that has fallen over, and will
+/// usually retry harder.
+pub fn serve_with(
+    bridge: &Bridge,
+    listener: &TcpListener,
+    limit: usize,
+    limits: &Limits,
+) -> std::io::Result<()> {
+    let mut limiter = RateLimiter::new(limits);
     for _ in 0..limit {
-        let (mut stream, _) = listener.accept()?;
+        let (mut stream, peer) = listener.accept()?;
+        if !limiter.allow(peer.ip()) {
+            // Timeouts first: even the refusal must not be able to block.
+            let _ = stream.set_write_timeout(Some(limits.write_timeout));
+            let _ = write_response(&mut stream, status::BAD_REQUEST, &[]);
+            continue;
+        }
         // One bad connection must not take the server down.
-        let _ = serve_once(bridge, &mut stream);
+        let _ = serve_once_with(bridge, &mut stream, limits);
     }
     Ok(())
 }
 
 /// Reads an HTTP request and returns its body.
-fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+fn read_request(stream: &mut TcpStream, limits: &Limits) -> std::io::Result<Vec<u8>> {
+    let deadline = Instant::now();
     // Read until the header terminator, then exactly `Content-Length` more.
     // Reading to EOF would work only if the client half-closed, and a client
     // that expects a reply cannot.
@@ -89,10 +138,20 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
         }
         buffer.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
         // A header block this large is not a request this server serves.
-        if buffer.len() > 16 * 1024 {
+        if buffer.len() > limits.max_header_bytes {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "request headers too long",
+            ));
+        }
+        // A per-read timeout alone is not enough. A client can send one byte
+        // just inside every deadline and hold the queue indefinitely at no
+        // cost to itself, which on a single-threaded bridge is the whole
+        // service. The total deadline is what actually bounds that.
+        if deadline.elapsed() > limits.request_deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request deadline exceeded while reading headers",
             ));
         }
     };
@@ -105,7 +164,7 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
         .unwrap_or(0);
     // Bounded before allocating: a hostile Content-Length is otherwise a free
     // out-of-memory (the same defect `docs/design.md` D13 records upstream).
-    if length > 16 * 1024 * 1024 {
+    if length > limits.max_body_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "request body too large",
@@ -122,6 +181,12 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
             break;
         }
         body.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
+        if deadline.elapsed() > limits.request_deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request deadline exceeded while reading the body",
+            ));
+        }
     }
     body.truncate(length);
     Ok(body)

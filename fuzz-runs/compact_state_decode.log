@@ -42,3 +42,17 @@ INFO: seed corpus: files: 61 min: 1b max: 558b total: 6747b rss: 57Mb
 #16777216	pulse  cov: 301 ft: 644 corp: 59/6478b lim: 4096 exec/s: 254200 rss: 514Mb
 #25142459	REDUCE cov: 301 ft: 644 corp: 59/6474b lim: 4096 exec/s: 253964 rss: 514Mb L: 136/717 MS: 4 PersAutoDict-CopyPart-EraseBytes-PersAutoDict- DE: "\377\377"-"\377\377"-
 #33554432	pulse  cov: 301 ft: 644 corp: 59/6474b lim: 4096 exec/s: 234646 rss: 514Mb
+#51430280	NEW    cov: 301 ft: 645 corp: 60/7355b lim: 4096 exec/s: 210779 rss: 514Mb L: 881/881 MS: 4 EraseBytes-InsertByte-CopyPart-CrossOver-
+#51701000	NEW    cov: 301 ft: 648 corp: 61/11036b lim: 4096 exec/s: 210166 rss: 514Mb L: 3681/3681 MS: 5 InsertByte-InsertRepeatedBytes-CrossOver-CrossOver-CopyPart-
+#51701657	REDUCE cov: 301 ft: 648 corp: 61/10806b lim: 4096 exec/s: 210169 rss: 514Mb L: 3451/3451 MS: 2 ShuffleBytes-EraseBytes-
+#51702033	REDUCE cov: 301 ft: 648 corp: 61/10582b lim: 4096 exec/s: 210170 rss: 514Mb L: 3227/3227 MS: 1 EraseBytes-
+#51704401	REDUCE cov: 301 ft: 648 corp: 61/10461b lim: 4096 exec/s: 210180 rss: 514Mb L: 3106/3106 MS: 3 InsertByte-PersAutoDict-CrossOver- DE: "\000\000\000\000\000\000\000\002"-
+#51706020	REDUCE cov: 301 ft: 648 corp: 61/10425b lim: 4096 exec/s: 210187 rss: 514Mb L: 3070/3070 MS: 4 ShuffleBytes-ChangeASCIIInt-EraseBytes-InsertRepeatedBytes-
+#51758126	REDUCE cov: 301 ft: 648 corp: 61/10418b lim: 4096 exec/s: 210398 rss: 514Mb L: 3063/3063 MS: 1 EraseBytes-
+#51770895	REDUCE cov: 301 ft: 648 corp: 61/10414b lim: 4096 exec/s: 210450 rss: 514Mb L: 3059/3059 MS: 4 PersAutoDict-InsertRepeatedBytes-ShuffleBytes-EraseBytes- DE: "\000\000\000\000\000\000\000\002"-
+#52183485	REDUCE cov: 301 ft: 648 corp: 61/10411b lim: 4096 exec/s: 208733 rss: 579Mb L: 3056/3056 MS: 5 InsertRepeatedBytes-InsertRepeatedBytes-CrossOver-PersAutoDict-CrossOver- DE: "\377\377"-
+#52661967	REDUCE cov: 301 ft: 679 corp: 62/13468b lim: 4096 exec/s: 208976 rss: 579Mb L: 3057/3057 MS: 2 InsertByte-CMP- DE: "\001\000"-
+#52846063	REDUCE cov: 301 ft: 680 corp: 63/16Kb lim: 4096 exec/s: 208877 rss: 666Mb L: 3053/3057 MS: 1 EraseBytes-
+#53195934	REDUCE cov: 301 ft: 680 corp: 63/16Kb lim: 4096 exec/s: 208611 rss: 702Mb L: 3053/3057 MS: 1 EraseBytes-
+#67108864	pulse  cov: 301 ft: 680 corp: 63/16Kb lim: 4096 exec/s: 161708 rss: 702Mb
+#88331759	REDUCE cov: 301 ft: 680 corp: 63/14758b lim: 4096 exec/s: 132431 rss: 702Mb L: 1293/3057 MS: 5 CopyPart-EraseBytes-InsertByte-PersAutoDict-EraseBytes- DE: "\000\000\000\000\000\000\000\002"-

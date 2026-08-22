@@ -65,3 +65,16 @@ INFO: seed corpus: files: 71 min: 1b max: 1129b total: 10361b rss: 57Mb
 #2097152	pulse  cov: 323 ft: 936 corp: 63/7918b lim: 4096 exec/s: 17331 rss: 445Mb
 #2566225	NEW    cov: 323 ft: 937 corp: 64/8622b lim: 4096 exec/s: 18072 rss: 445Mb L: 704/704 MS: 3 CopyPart-ChangeBit-PersAutoDict- DE: "\223\250@\221D^\265\020X\022\321\354\371+\270\345\034\036\242\3344\035\273\364\216Z\220\260tER\275"-
 #2731429	REDUCE cov: 323 ft: 937 corp: 64/8598b lim: 4096 exec/s: 18331 rss: 445Mb L: 98/704 MS: 4 CopyPart-InsertByte-EraseBytes-ChangeBit-
+#2809467	REDUCE cov: 323 ft: 937 corp: 64/8595b lim: 4096 exec/s: 18243 rss: 445Mb L: 95/704 MS: 3 ChangeBinInt-ChangeBinInt-EraseBytes-
+#3320888	REDUCE cov: 323 ft: 937 corp: 64/8593b lim: 4096 exec/s: 18246 rss: 445Mb L: 97/704 MS: 5 ChangeByte-ShuffleBytes-ChangeASCIIInt-ChangeASCIIInt-EraseBytes-
+#3745795	REDUCE cov: 323 ft: 937 corp: 64/8592b lim: 4096 exec/s: 18095 rss: 445Mb L: 96/704 MS: 2 ChangeBit-EraseBytes-
+#3759785	REDUCE cov: 323 ft: 937 corp: 64/8590b lim: 4096 exec/s: 18075 rss: 445Mb L: 92/704 MS: 4 CMP-EraseBytes-ChangeBinInt-CMP- DE: "\001\000\000M"-"\023\000\000\000"-
+#3980536	REDUCE cov: 323 ft: 937 corp: 64/8589b lim: 4096 exec/s: 18259 rss: 445Mb L: 94/704 MS: 1 EraseBytes-
+#4003225	NEW    cov: 323 ft: 943 corp: 65/9901b lim: 4096 exec/s: 18279 rss: 445Mb L: 1312/1312 MS: 4 ChangeASCIIInt-PersAutoDict-PersAutoDict-CopyPart- DE: "\023\000\000\000"-"\001\000\000\000\000\000\000\020"-
+#4194304	pulse  cov: 323 ft: 943 corp: 65/9901b lim: 4096 exec/s: 18396 rss: 445Mb
+#4209951	REDUCE cov: 323 ft: 943 corp: 65/9897b lim: 4096 exec/s: 18464 rss: 445Mb L: 90/1312 MS: 1 EraseBytes-
+#5806718	REDUCE cov: 323 ft: 943 corp: 65/9896b lim: 4096 exec/s: 19355 rss: 445Mb L: 90/1312 MS: 2 ShuffleBytes-EraseBytes-
+#7488789	REDUCE cov: 323 ft: 943 corp: 65/9895b lim: 4096 exec/s: 19916 rss: 445Mb L: 89/1312 MS: 1 EraseBytes-
+#8388608	pulse  cov: 323 ft: 943 corp: 65/9895b lim: 4096 exec/s: 20068 rss: 445Mb
+#8858938	REDUCE cov: 323 ft: 943 corp: 65/9863b lim: 4096 exec/s: 20088 rss: 445Mb L: 123/1312 MS: 3 PersAutoDict-ChangeByte-EraseBytes- DE: "\001\000\000\000\000\000\000X"-
+#9388650	REDUCE cov: 323 ft: 943 corp: 65/9860b lim: 4096 exec/s: 19933 rss: 445Mb L: 91/1312 MS: 2 EraseBytes-PersAutoDict- DE: "\023\000\000\000"-
