@@ -944,12 +944,16 @@ So every bandwidth or composition figure in `docs/benchmarks.md` names its
 height range, and any that cannot be reproduced in at least two eras is
 provisional.
 
-**Phase 5a's headline was re-checked on 2026-08-22 and survives** — unlike the
-figure that prompted this entry. Measured over 1,000,000–1,400,000 (Sapling era,
-0.7 nullifiers per block) instead of at tip (3.4), the advantage falls from
-31,705× to 13,201× for a one-note wallet and the crossover moves from 13 blocks
-to 30. Smaller by about 2.4×, in the same direction, for the obvious reason:
-scanning is linear in nullifiers revealed and a proof is not.
+**Phase 5a's headline was re-checked on 2026-08-22 across three eras and
+survives** — unlike the figure that prompted this entry. On one basis (the
+sparse 637-byte proof), a one-note wallet at a 400,000-block gap sees 13,201× in
+the Sapling era, 69,040× at tip, and 107,371× across sandblasting. A spread of
+eight, tracking shielded activity, and never a change of sign.
+
+Re-measuring also caught a second-order version of this entry's own mistake:
+the first write-up compared the new pre-NU5 figure against Phase 5a's published
+31,705×, which predates the sparse encoding and is on the dense 1,362-byte
+basis. Not the wrong era that time — the wrong units.
 
 That is the distinction worth keeping. D32's 73.0% *inverted* between eras; this
 one only changes scale. A result that moves by a factor is era-dependent and

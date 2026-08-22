@@ -897,3 +897,5 @@ INFO: seed corpus: files: 222 min: 1b max: 4083b total: 92617b rss: 57Mb
 #1064071992	REDUCE cov: 809 ft: 2818 corp: 280/96Kb lim: 4096 exec/s: 17497 rss: 423Mb L: 45/3381 MS: 2 EraseBytes-ChangeBit-
 #1071410558	REDUCE cov: 809 ft: 2818 corp: 280/96Kb lim: 4096 exec/s: 17476 rss: 423Mb L: 436/3381 MS: 1 EraseBytes-
 #1073741824	pulse  cov: 809 ft: 2818 corp: 280/96Kb lim: 4096 exec/s: 17465 rss: 423Mb
+#1090052055	REDUCE cov: 809 ft: 2818 corp: 280/96Kb lim: 4096 exec/s: 17416 rss: 423Mb L: 66/3381 MS: 2 ChangeASCIIInt-EraseBytes-
+#1096918957	REDUCE cov: 809 ft: 2818 corp: 280/96Kb lim: 4096 exec/s: 17402 rss: 423Mb L: 382/3381 MS: 2 CrossOver-InsertByte-

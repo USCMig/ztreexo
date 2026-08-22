@@ -699,7 +699,7 @@ today. Framing B — "how long does my wallet take to sync" — is essentially
 unaffected, and any presentation of these numbers that quotes the 31,705×
 without saying so is choosing the flattering question.
 
-### Re-measured in an earlier era, 2026-08-22
+### Re-measured across three eras, 2026-08-22
 
 [D32](design.md) concluded that a figure measured over one slice of chain
 history is not a property of the design, after Phase 4b's 73.0%
@@ -708,34 +708,52 @@ measured anywhere else. Its closing note flagged this result as needing the
 same check, since it was taken over the most recent 400,001 blocks only.
 
 Checked. `gap_cost` now takes `ZUTREEXO_GAP_END`, so any era can be sampled.
+**All figures below use the sparse 637-byte proof** — see the correction note.
 
 | 400,000-block window | nullifiers/block | share of a compact sync | 1 note | 10 notes | 100 notes |
 |---|---|---|---|---|---|
-| **1,000,000–1,400,000** (Sapling era, pre-NU5) | 0.7 | 7.0% | 13,201× | 1,320× | 132× |
-| **3,054,402–3,454,402** (tip, the original) | 3.4 | 14.7% | 31,705× | 3,170× | 317× |
+| **1,000,000–1,400,000** — Sapling era, pre-NU5 | 0.7 | 7.0% | 13,201× | 1,320× | 132× |
+| **1,350,000–1,750,000** — sandblasting | 5.3 | **3.1%** | **107,371×** | 10,737× | 1,074× |
+| **3,057,000–3,457,000** — tip | 3.4 | 14.8% | 69,040× | 6,904× | 690× |
 
-Crossovers move with it:
+Crossovers, same basis:
 
-| wallet | pre-NU5 | at tip |
-|---|---|---|
-| 1 note | 30 blocks (~0.6 h) | 13 blocks (~16 min) |
-| 10 notes | 303 blocks (~6.3 h) | 126 blocks (~2.6 h) |
-| 100 notes | 3,030 blocks (~63 h) | 1,262 blocks (~26 h) |
+| wallet | pre-NU5 | sandblasting | tip |
+|---|---|---|---|
+| 1 note | 30 blocks | 4 blocks | 6 blocks |
+| 10 notes | 303 blocks | 37 blocks | 58 blocks |
+| 100 notes | 3,030 blocks (~63 h) | 373 blocks (~7.8 h) | 579 blocks (~12 h) |
 
-**The direction survives; the magnitude does not.** Pre-NU5 the advantage is
-about 2.4× smaller and the crossovers about 2.4× further out, because shielded
-activity was that much thinner — 0.7 nullifiers per block against 3.4. That
-ratio is the whole difference: scanning cost is linear in nullifiers revealed,
-and a proof costs the same either way.
+**The direction holds in every era; the magnitude spans a factor of eight.**
+Proofs win in all three, and a wallet offline more than about a day is better
+off with them everywhere. The spread tracks shielded activity almost exactly —
+scanning cost is linear in nullifiers revealed, a proof costs the same either
+way, so 0.7 per block versus 5.3 is most of the difference.
 
-So unlike D32's case this is **not** an inversion. The claim CLAUDE.md set out
-to test holds in both eras, and a wallet offline more than a few days is better
-off with proofs in either. What changes is how much better, and any single
-number quoted without its height range is overstating one era's arithmetic —
-which is exactly what D32 was written about.
+Unlike D32's case this is **not** an inversion. The claim CLAUDE.md set out to
+test survives being measured somewhere else, which is precisely what the 73.0%
+did not.
 
-Read alongside D35: the direction holding does not make the query one a
-privacy-conscious wallet can make.
+**Framing A and Framing B move in opposite directions**, which is the finding
+worth keeping from the third row. The sandblasting era is the *best* case for
+proofs against scanning (107,371×) and simultaneously the *worst* case for
+dropping nullifiers from a full sync (3.1%, against 14.8% at tip) — because
+sandblasted blocks are enormous, so the nullifiers inside them are a small
+share of bytes a syncing wallet must fetch regardless. An era that flatters one
+framing penalises the other.
+
+> **Correction, same day.** The first version of this section compared
+> pre-NU5's 13,201× against Phase 5a's 31,705× and concluded the advantage was
+> "about 2.4× smaller". **Those two numbers are on different bases.** Phase 5a
+> predates the sparse encoding and used the dense 1,362-byte proof; `gap_cost`
+> now reports the 637-byte sparse one. On a single basis the tip figure is
+> 69,040× and the real spread is 5.2×, not 2.4×.
+>
+> Caught by re-measuring tip alongside the other two and getting a crossover of
+> 6 blocks where Phase 5a's table said 13 — a ratio of 2.14, which is exactly
+> 1362/637. Comparing a new measurement against an old one without checking
+> they were taken the same way is the same error D32 is about, one level down:
+> not the wrong era, the wrong units.
 
 ### The trust caveat, which is not a footnote
 
