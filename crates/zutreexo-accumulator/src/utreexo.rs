@@ -304,6 +304,44 @@ impl UtxoRoots {
         }
     }
 
+    /// Rebuilds a roots-only view from roots and a leaf counter.
+    ///
+    /// # This is a trust boundary, and it is the only one in this type
+    ///
+    /// Every other mutation carries a proof. This one does not: it exists so a
+    /// compact node can *bootstrap* from a state someone else computed, which
+    /// CLAUDE.md Phase 3 asks for — "a trusted-but-verifiable state at height
+    /// H, then validate forward". The verifiable half is the caller's job:
+    /// compare these roots against several independent bridges before adopting
+    /// them, exactly as `wire::Roots` describes.
+    ///
+    /// `leaves` is the total ever inserted, **not** the unspent count. Utreexo
+    /// assigns positions from that counter and never decrements it.
+    ///
+    /// # A wrong counter is accepted silently
+    ///
+    /// An earlier version of this comment claimed a wrong counter "would place
+    /// every subsequent leaf at the wrong position and fail on the first proof
+    /// rather than silently". That was wrong twice over, and
+    /// `a_wrong_leaf_counter_is_silent_and_sometimes_delayed` pins what actually
+    /// happens: [`UtxoRoots::insert`] never rejects a bad counter — Utreexo has
+    /// no way to notice, since the count is an input rather than a claim it can
+    /// check — and divergence, while common, is not universal on the next
+    /// block. Sixteen leaves seeded as twelve produce *identical* roots after
+    /// one insert and diverge only later.
+    ///
+    /// So this is a genuine trust boundary and not a self-checking one. The
+    /// mitigation is comparing the seed against independent bridges, which is
+    /// what makes roots being a few hundred bytes matter.
+    pub fn from_parts(roots: &[Hash], leaves: u64) -> UtxoRoots {
+        UtxoRoots {
+            stump: Stump {
+                leaves,
+                roots: roots.iter().copied().map(ZcashNodeHash::new).collect(),
+            },
+        }
+    }
+
     /// The current roots, one per perfect tree in the forest.
     pub fn roots(&self) -> Vec<Hash> {
         self.stump
@@ -411,6 +449,17 @@ impl UtxoForest {
             .iter()
             .filter_map(|node| node.get_data().to_bytes())
             .collect()
+    }
+
+    /// Total leaves ever added, including spent ones.
+    ///
+    /// Mirrors [`UtxoRoots::leaves`], and the two must agree for a compact node
+    /// seeded from a full forest to verify anything: Utreexo derives positions
+    /// from this counter, so a compact node given the *unspent* count instead
+    /// would place every later leaf wrongly. Exposing it is what makes
+    /// [`UtxoRoots::from_parts`] usable from a bridge.
+    pub fn leaves(&self) -> u64 {
+        self.forest.leaves
     }
 
     /// Proves that `leaves` are in the accumulator.
@@ -708,5 +757,101 @@ mod tests {
         let mut forest = forest;
         forest.delete(&leaves[3..5]).unwrap();
         assert_ne!(restored.roots(), forest.roots());
+    }
+
+    /// A roots-only view seeded from a full forest verifies that forest's proofs.
+    ///
+    /// This is the bootstrap path a compact node takes (`CompactState::from_roots`,
+    /// Phase 5b). It is a trust boundary — nothing in the seed is checked, because
+    /// roots are opaque — so what has to hold is that a *correct* seed is
+    /// immediately usable, and an incorrect one fails rather than drifting.
+    #[test]
+    fn a_seeded_roots_view_verifies_the_forest_it_came_from() {
+        let leaves: Vec<Hash> = (1..=16u8).map(|n| leaf(n).hash()).collect();
+        let mut forest = UtxoForest::new();
+        forest.insert(&leaves).unwrap();
+        forest.delete(&leaves[..3]).unwrap();
+
+        let seeded = UtxoRoots::from_parts(&forest.roots(), forest.leaves());
+        assert_eq!(seeded.roots(), forest.roots());
+        assert_eq!(seeded.leaves(), forest.leaves());
+
+        let proof = forest.prove(&leaves[5..8]).unwrap();
+        assert!(
+            seeded.verify(&proof, &leaves[5..8]).unwrap(),
+            "a seeded view rejected a proof from the forest it was seeded from"
+        );
+    }
+
+    /// **A wrong leaf counter is accepted silently, and may not diverge at once.**
+    ///
+    /// Measured, because the first version of `from_parts`'s documentation
+    /// claimed the opposite — that seeding with the unspent count "would place
+    /// every subsequent leaf at the wrong position and fail on the first proof
+    /// rather than silently". Both halves were false, and a sweep over counts
+    /// 0..=n+2 for forests of 3..16 leaves said so:
+    ///
+    /// * `insert` **never** returned an error for a wrong counter. Not once.
+    ///   Utreexo has no way to notice; the count is an input, not a claim it
+    ///   can check.
+    /// * Divergence is common but **not universal on the next block**. With 16
+    ///   leaves, seeding 12 instead of 16 produces *identical* roots after one
+    ///   insert, because both counts have a clear low bit and the leaf is
+    ///   simply appended in each case. It surfaces later.
+    ///
+    /// This is the same mistake as `docs/design.md` D29 — a comment asserting a
+    /// protection the code does not provide — and it is why the seed is a trust
+    /// boundary to be checked against independent bridges rather than something
+    /// a compact node can validate on its own.
+    #[test]
+    fn a_wrong_leaf_counter_is_silent_and_sometimes_delayed() {
+        let build = |count: u8| {
+            let leaves: Vec<Hash> = (1..=count).map(|n| leaf(n).hash()).collect();
+            let mut forest = UtxoForest::new();
+            forest.insert(&leaves).unwrap();
+            forest
+        };
+        let extra = [leaf(200).hash()];
+
+        // Case 1: silent divergence. 8 leaves seeded as 7.
+        let forest = build(8);
+        let mut right = UtxoRoots::from_parts(&forest.roots(), forest.leaves());
+        let mut wrong = UtxoRoots::from_parts(&forest.roots(), 7);
+        right.insert(&extra).unwrap();
+        wrong
+            .insert(&extra)
+            .expect("a wrong counter is not rejected — that is the point");
+        assert_ne!(
+            right.roots(),
+            wrong.roots(),
+            "8-seeded-as-7 should diverge on the next insert"
+        );
+
+        // Case 2: the delayed one, which is why "it fails fast" was wrong.
+        // 16 leaves seeded as 12 gives identical roots after one insert.
+        let forest = build(16);
+        let mut right = UtxoRoots::from_parts(&forest.roots(), forest.leaves());
+        let mut wrong = UtxoRoots::from_parts(&forest.roots(), 12);
+        right.insert(&extra).unwrap();
+        wrong.insert(&extra).unwrap();
+        assert_eq!(
+            right.roots(),
+            wrong.roots(),
+            "if this now diverges immediately, the delayed case is gone and the \
+             from_parts documentation should be revisited"
+        );
+        assert_ne!(
+            right.leaves(),
+            wrong.leaves(),
+            "the counters must still differ, or the case is not what it claims"
+        );
+    }
+
+    #[test]
+    fn an_empty_seed_equals_a_fresh_accumulator() {
+        let seeded = UtxoRoots::from_parts(&[], 0);
+        let fresh = UtxoRoots::new();
+        assert_eq!(seeded.roots(), fresh.roots());
+        assert_eq!(seeded.leaves(), fresh.leaves());
     }
 }

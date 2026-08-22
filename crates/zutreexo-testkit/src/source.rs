@@ -106,6 +106,63 @@ impl RpcSource {
         }
     }
 
+    /// The hash of the block the node currently has at `height`.
+    ///
+    /// # Why a shadow run needs this
+    ///
+    /// Height alone does not identify a block. Following the tip means the
+    /// block at height *h* can be *replaced* — that is what a reorg is — and a
+    /// follower that only tracked heights would apply the replacement on top of
+    /// the block it superseded and diverge silently from then on.
+    ///
+    /// So the shadow runner remembers the hash of every block it applied and
+    /// re-checks it before extending. A mismatch is the signal to unwind. This
+    /// is the first time the rollback path meets a reorg it did not generate
+    /// itself: `tests/reorg_fuzz.rs` ran 10⁶ synthetic ones, all of our own
+    /// construction.
+    pub fn block_hash(&self, height: u32) -> Result<String, SourceError> {
+        let value = self.call("getblockhash", &format!("[{height}]"))?;
+        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+            return Err(SourceError::Response {
+                height,
+                reason: error.to_string(),
+            });
+        }
+        value
+            .get("result")
+            .and_then(|r| r.as_str())
+            .map(str::to_owned)
+            .ok_or(SourceError::Missing { height })
+    }
+
+    /// One block as `zebrad`'s own JSON, at the given verbosity.
+    ///
+    /// # The second oracle, live
+    ///
+    /// `scripts/capture_checkpoints.py` uses this route offline to produce the
+    /// committed checkpoints: our parser goes raw bytes → `zebra_chain`
+    /// deserializer → counts, and this goes the same raw bytes → zebrad's RPC
+    /// serializer → JSON → counts. Agreement means the parse is right rather
+    /// than merely self-consistent, which no amount of comparing our two models
+    /// against each other can establish.
+    ///
+    /// A shadow run does it per block instead of per slice, because at tip
+    /// there is no committed checkpoint to compare against and the blocks
+    /// arriving are ones nobody chose.
+    pub fn block_json(&self, height: u32, verbosity: u8) -> Result<serde_json::Value, SourceError> {
+        let value = self.call("getblock", &format!(r#"["{height}", {verbosity}]"#))?;
+        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+            return Err(SourceError::Response {
+                height,
+                reason: error.to_string(),
+            });
+        }
+        value
+            .get("result")
+            .cloned()
+            .ok_or(SourceError::Missing { height })
+    }
+
     /// One request/response cycle on a fresh connection.
     ///
     /// A connection per call rather than a pool: `zebrad` closes idle
@@ -448,6 +505,69 @@ mod tests {
         let addr = fake_zebrad(r#"{"result":"deadbeef","error":null}"#);
         let source = RpcSource::new(&addr);
         assert_eq!(source.raw_block(1).unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[test]
+    fn rpc_source_reads_a_block_hash() {
+        // Phase 5b: this is what makes reorg detection possible. Height alone
+        // does not identify a block, so a follower that tracked only heights
+        // would stack a replacement on the block it replaced.
+        let hash = "0000000000074f33c8f9ac98043854c02a64afaf99dacc2f8245b8ada694ba2e";
+        let addr = fake_zebrad(
+            r#"{"result":"0000000000074f33c8f9ac98043854c02a64afaf99dacc2f8245b8ada694ba2e","error":null}"#,
+        );
+        let source = RpcSource::new(&addr);
+        assert_eq!(source.block_hash(3_455_190).unwrap(), hash);
+    }
+
+    #[test]
+    fn a_block_hash_error_names_the_height() {
+        let addr = fake_zebrad(r#"{"result":null,"error":{"code":-8,"message":"out of range"}}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            RpcSource::block_hash(&source, 9_999_999),
+            Err(SourceError::Response {
+                height: 9_999_999,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_block_hash_with_no_result_is_missing_not_a_panic() {
+        let addr = fake_zebrad(r#"{"error":null}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.block_hash(5),
+            Err(SourceError::Missing { height: 5 })
+        ));
+    }
+
+    #[test]
+    fn rpc_source_returns_block_json_verbatim() {
+        // The live parse oracle. Returned as-is rather than parsed here,
+        // because the counting belongs with the comparison in shadow.rs where
+        // it can be kept field-for-field identical to
+        // scripts/capture_checkpoints.py.
+        let addr =
+            fake_zebrad(r#"{"result":{"height":42,"tx":[{"vin":[],"vout":[]}]},"error":null}"#);
+        let source = RpcSource::new(&addr);
+        let json = source.block_json(42, 2).unwrap();
+        assert_eq!(json.get("height").and_then(|h| h.as_u64()), Some(42));
+        assert_eq!(
+            json.get("tx").and_then(|t| t.as_array()).map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_block_json_error_field_becomes_a_response_error() {
+        let addr = fake_zebrad(r#"{"result":null,"error":{"code":-5,"message":"no such block"}}"#);
+        let source = RpcSource::new(&addr);
+        assert!(matches!(
+            source.block_json(11, 2),
+            Err(SourceError::Response { height: 11, .. })
+        ));
     }
 
     #[test]

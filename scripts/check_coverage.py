@@ -204,6 +204,23 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "sync cost against gap length. Reporting only; it computes no state."
         ),
     },
+    # Phase 5b's shadow runner. Same category again, and more so than the
+    # others: it follows the *live* chain tip for hours and its most
+    # interesting path — reorg recovery — fires only when mainnet reorgs, which
+    # no test environment can arrange. The compact node's half of that claim is
+    # covered by zutreexo-csn/tests/reorg.rs, and the block-hash and JSON
+    # oracle plumbing lives in src/source.rs.
+    #
+    # PLAN.md records that shadow.rs's own `unwind` is untested in anger. This
+    # entry is why that has to be said out loud rather than inferred from a
+    # coverage number.
+    "crates/zutreexo-testkit/src/bin/shadow.rs": {
+        "never_measured": (
+            "operational entry point — follows a live zebrad at chain tip. Its "
+            "reorg path needs mainnet to reorg. The compact-node rollback it "
+            "relies on is covered by zutreexo-csn/tests/reorg.rs."
+        ),
+    },
     # Phase 4a. The bundle format is what a bridge serves and a compact node
     # consumes, so its decoder is an untrusted-input surface like store.rs.
     "crates/zutreexo-chain/src/bundle.rs": {

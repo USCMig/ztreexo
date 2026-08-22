@@ -34,12 +34,12 @@ infrastructure, `fix/<topic>` for defects.
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
-| 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, peak 32.7 GiB |
+| 2d | Genesis-forward replay | `phase-2d-replay` | **complete** — all 3,452,736 blocks applied from genesis with zero errors, 7h02m, RSS at tip 32.7 GiB (the run's own table shows 33.3 GiB earlier; the binary was printing current RSS labelled "peak" and now reads `VmHWM`) |
 | 3 | Persistence, snapshots, crash consistency | `phase-3-persistence` | **complete** — DoD met: 25 SIGKILLs mid-save, store intact every time, with a non-atomic control proving the harness detects corruption. Merged `main` 2026-08-20; the merge's coverage run found three snapshot tests passing for the wrong reason ([D24](docs/design.md)) |
 | 4a | Proof bundle + compact state node verification core | `phase-4a-bundle` | **complete** — a roots-only node tracks the bridge byte-for-byte over real mainnet blocks; bandwidth measured and it is unflattering ([`docs/benchmarks.md`](docs/benchmarks.md)) |
 | 4b | Sparse wire format, bridge service, served IBD | `phase-4a-bundle` | **complete** — Phase 4 DoD met over a real socket; sparse paths cut wallet proofs 53.2% and bundle overhead 170.5% to 152.6%. Not gRPC ([D27](docs/design.md)) |
 | 5a | Headline measurement: nullifier-check cost vs gap length | `phase-4a-bundle` | **complete** — the claim holds decisively for spend-status queries (317x to 31,705x at a year's gap) and barely at all for full sync (<=14.7% of bytes, 0% of trial decryption) |
-| 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | — | not started |
+| 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | `phase-5b-shadow` | **complete** — storage measured at last (31.7 GiB vs 693 B, ~49M:1), latency p50/p99 over 60k sandblasting blocks and 1,021 at tip, and 500 blocks shadowed at the live tip with zero divergences. Reverses the narrow-or-keep direction: **keep the transparent forest** (below). Shadow is external to Zebra ([D30](docs/design.md)); reorg recovery is a queue for a compact node ([D31](docs/design.md)) |
 | 6 | Fuzzing, DoS analysis, privacy review | — | not started |
 | 7 | ZIP draft — gated on 5 and 6 | — | not started |
 
@@ -56,14 +56,72 @@ to wait out was wrong: the wrapper written to contain it did not. Every decoder
 added from here should get a bit-flip and truncation sweep at the time it is
 written, not at Phase 6.
 
-**The evidence for dropping the transparent forest is now three-deep.** Phase 0
-found 27.5M transparent outputs at tip, not the small set expected; Phase 4a/4b
-put 73.0% of proof bandwidth in Utreexo inclusion proofs; and the overhead rises
-with height. Unlike the nullifier side there is no compression left to apply — a
-Utreexo forest is dense by construction, so its proofs carry no derivable
-filler. CLAUDE.md Phase 5 says to narrow rather than ship both out of sunk cost.
-**Not decided yet**: Phase 5b's storage and latency figures are the other half
-of the argument.
+**Reorg handling is tested in three of its four parts.** Taken separately,
+because they need different things to test them:
+
+| part | covered by | needs a real reorg? |
+|---|---|---|
+| compact node restores a kept state and stays byte-identical to a cold replay | `zutreexo-csn/tests/reorg.rs` | no |
+| deciding *where* to unwind to | `zutreexo-testkit/tests/shadow_fork.rs` | no |
+| reload the bridge snapshot, replay the common prefix | `load` + `apply_block`, covered elsewhere | no |
+| the three composed, against a chain that actually forked | — | **yes** |
+
+`shadow.rs` calls `shadow::find_fork` rather than keeping its own copy, so the
+tested walk is the one that runs. The `reorg.rs` invariant is CLAUDE.md Phase
+2's unsoftened: apply branch A, restore to the fork, apply divergent branch B,
+end **byte-identical** to a node that only ever saw the final chain — with both
+blindness checks confirmed firing.
+
+What remains untested is the composition. **The 500-block shadow run of
+2026-08-22 saw zero reorgs over 12h39m**, which was the expected outcome and
+does not change this line: the composed path has still never run against a real
+fork. The failure mode is safe rather than silent — every path in `unwind` ends
+the run with a named reason, and roots are re-compared byte-for-byte after
+rewinding — but "safe when it fails" is not "known to work".
+
+Closing it needs either a much longer shadow run, testnet (which reorgs far more
+often), or a scripted node stub that serves a fork on demand. The last is the
+only one that belongs in CI.
+
+**A full node's reorg data does not fit at tip, which is itself a finding.**
+`RollbackJournal` was built in stage 2c and is the wrong tool at mainnet tip:
+`record` clones the whole outpoint index, measured at **14 MiB per block** in a
+smoke run, which extrapolates to ~15 GiB for one retained snapshot against 27.5M
+outputs. The shadow runner reloads and replays instead. See
+[D31](docs/design.md) — the asymmetry with the compact node's few hundred bytes
+is an argument for the design, not merely a harness detail.
+
+**The case for dropping the transparent forest has collapsed, and it was a
+measurement artifact.** This entry previously read "the evidence is now
+three-deep", resting on Phase 4a/4b putting **73.0%** of proof bandwidth in
+Utreexo inclusion proofs, rising with height.
+
+Phase 5b measured the same thing in two other eras and the composition inverts:
+
+| measured over | proof overhead | Utreexo share | nullifier share |
+|---|---|---|---|
+| heights 0–150,000 | 152.6% | **73.0%** | ~27% |
+| heights 1.70M–1.76M | 8.3% | **9.5%** | **87.1%** |
+| live tip | 38.4% | — | — |
+
+Phases 4a and 4b only ever measured heights 0–150,000. Those blocks are tiny and
+almost purely transparent, so proofs dominate them; a sandblasted block averages
+471 KB and the entire bundle is 8.3% of it. On the modern chain Utreexo proofs
+are under a tenth of a bundle.
+
+The 73.0% was never wrong — it was a property of 2011 presented as a property of
+the design. Of the three signals, one (27.5M outputs at tip) stands, one
+(73.0% of bandwidth) is withdrawn, and the third ("overhead rises with height")
+is contradicted outright: overhead at tip is 38.4% against 152.6% early.
+
+**So: keep the transparent forest.** Narrowing to the nullifier accumulator
+would drop the cheap half and keep the expensive one. `docs/benchmarks.md`
+Phase 5b has the numbers.
+
+The general lesson, which cost this project a nearly-taken decision: **a figure
+measured over one slice of chain history is not a property of the design.**
+Every bandwidth or composition number in these docs should name its height
+range, and several did not.
 
 **A bridge cannot be multi-threaded as built.** `ChainAccumulators` is not
 `Send` because `rustreexo`'s `MemForest` is `Rc`/`Weak` with interior
