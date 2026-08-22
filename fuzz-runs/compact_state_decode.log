@@ -61,3 +61,7 @@ INFO: seed corpus: files: 61 min: 1b max: 558b total: 6747b rss: 57Mb
 #185928144	REDUCE cov: 301 ft: 680 corp: 63/14698b lim: 4096 exec/s: 117156 rss: 702Mb L: 1261/3057 MS: 5 InsertByte-ChangeBit-EraseBytes-ChangeASCIIInt-CopyPart-
 #198426938	REDUCE cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 117830 rss: 702Mb L: 108/3057 MS: 4 EraseBytes-CrossOver-ChangeBit-InsertByte-
 #268435456	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 116863 rss: 702Mb
+#536870912	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 121162 rss: 702Mb
+#1073741824	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 131024 rss: 702Mb
+#2147483648	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 135206 rss: 702Mb
+#4294967296	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 137562 rss: 702Mb

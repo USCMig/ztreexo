@@ -67,10 +67,25 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # The load-bearing file. CLAUDE.md Phase 1 wants 100% *branch* coverage
     # here; it is at 58/70. Stage 2c raised both the numerator and the
     # denominator by adding `undo_insert`.
+    # Phase 1's definition of done, and the only file in the workspace whose
+    # branch floor is *exact* rather than set a couple below the observed
+    # minimum.
+    #
+    # It can be exact because `tests/imt_branches.rs` is deterministic — fixed
+    # inputs, named expected errors, no generation — so this figure does not
+    # move between runs the way the proptest-driven files do. That was the
+    # blocker recorded in PLAN.md: a gate on a number that wanders gets
+    # switched off, and takes the stable ratchets with it.
+    #
+    # 83 of 88. The five missing sides are defensive guards no public call can
+    # reach; they are enumerated in CLAUDE.md's amended Phase 1 DoD, and
+    # deleting them to reach 88 would trade a real safety net for a number.
+    # If this ever reads above 83, something became reachable that was not —
+    # find out what before raising the floor.
     "crates/zutreexo-accumulator/src/imt.rs": {
-        "regions": 96.8,
-        "lines": 96.4,
-        "min_branches": 56,  # measured 58/70
+        "regions": 97.4,
+        "lines": 98.3,
+        "min_branches": 83,  # exact: 83/88, five unreachable guards excluded
     },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average.

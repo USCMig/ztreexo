@@ -225,3 +225,15 @@ INFO: seed corpus: files: 82 min: 1b max: 414b total: 5688b rss: 57Mb
 #353538210	REDUCE cov: 184 ft: 449 corp: 72/6111b lim: 4096 exec/s: 154518 rss: 553Mb L: 321/634 MS: 4 ChangeASCIIInt-ChangeByte-ChangeByte-EraseBytes-
 #354050617	REDUCE cov: 184 ft: 449 corp: 72/6110b lim: 4096 exec/s: 154404 rss: 553Mb L: 288/634 MS: 2 CrossOver-EraseBytes-
 #406838910	REDUCE cov: 184 ft: 449 corp: 72/6101b lim: 4096 exec/s: 150513 rss: 553Mb L: 585/634 MS: 2 EraseBytes-PersAutoDict- DE: "8\000\000\000\000\000\000\000"-
+#525132298	REDUCE cov: 184 ft: 449 corp: 72/6100b lim: 4096 exec/s: 150209 rss: 553Mb L: 584/634 MS: 3 ChangeBinInt-EraseBytes-CMP- DE: "\000\000\000\000\000\000\0005"-
+#536870912	pulse  cov: 184 ft: 449 corp: 72/6100b lim: 4096 exec/s: 150510 rss: 553Mb
+#668447732	REDUCE cov: 184 ft: 449 corp: 72/6094b lim: 4096 exec/s: 152127 rss: 553Mb L: 578/634 MS: 4 CrossOver-ChangeASCIIInt-ChangeByte-EraseBytes-
+#668472483	REDUCE cov: 184 ft: 449 corp: 72/6093b lim: 4096 exec/s: 152133 rss: 553Mb L: 577/634 MS: 1 EraseBytes-
+#831139840	REDUCE cov: 184 ft: 449 corp: 72/6090b lim: 4096 exec/s: 154171 rss: 553Mb L: 155/634 MS: 2 ChangeBit-EraseBytes-
+#836386937	REDUCE cov: 184 ft: 449 corp: 72/6089b lim: 4096 exec/s: 154286 rss: 553Mb L: 154/634 MS: 2 CrossOver-EraseBytes-
+#1073741824	pulse  cov: 184 ft: 449 corp: 72/6089b lim: 4096 exec/s: 155727 rss: 553Mb
+#1517768710	REDUCE cov: 184 ft: 449 corp: 72/6088b lim: 4096 exec/s: 158978 rss: 553Mb L: 26/634 MS: 3 EraseBytes-CopyPart-ChangeBit-
+#2147483648	pulse  cov: 184 ft: 449 corp: 72/6088b lim: 4096 exec/s: 158112 rss: 553Mb
+#4294967296	pulse  cov: 184 ft: 449 corp: 72/6088b lim: 4096 exec/s: 161065 rss: 553Mb
+#6128999157	REDUCE cov: 184 ft: 449 corp: 72/6084b lim: 4096 exec/s: 160731 rss: 553Mb L: 218/634 MS: 2 PersAutoDict-EraseBytes- DE: "I\000\000\000\000\000\000\000"-
+#8589934592	pulse  cov: 184 ft: 449 corp: 72/6084b lim: 4096 exec/s: 159093 rss: 553Mb
