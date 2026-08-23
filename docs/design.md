@@ -961,7 +961,7 @@ must name its range; a result that changes sign was never a result.
 
 ---
 
-## D33 — `MemForest::deserialize` panics on malformed input; contained, not fixed
+## D33 — `MemForest::deserialize` is not total on malformed input
 
 **Phase 6.** Found by the fuzzer in under 3,000 executions, twenty-five bytes
 long, and reachable from a file on disk.
@@ -1011,6 +1011,60 @@ The regression test is written against the public behaviour ("this returns an
 error"), not against the panic, so it keeps passing unchanged once the fork is
 fixed and the `catch_unwind` comes out. A test asserting a panic would have to
 be rewritten by whoever fixed it, which is how a seed gets quietly deleted.
+
+### Correction (2026-08-23): the containment above is incomplete
+
+Writing the fork fix turned up a **second** bug in the same function, and it is
+the more serious of the two — because the paragraphs above claim a containment
+that does not hold against it.
+
+`Node::read_one` recurses once per branch node, and nothing bounds the depth,
+so the *input* chooses how deep the recursion goes. A left spine of nested
+branch nodes overflows the stack: **~1.2 MB of input in a debug build, ~4 MB in
+release**, measured. A snapshot file is an ordinary place to find four
+megabytes.
+
+**A stack overflow aborts the process. It does not unwind.** So
+`catch_unwind` in `UtxoForest::from_bytes` does nothing for this input class,
+and the section above — written when the node-type `panic!` looked like the
+whole problem — was wrong to describe our boundary as contained. It was
+contained against the panic and open against the overflow. The distinction was
+not visible until the panic was fixed and the fuzzer's next crash was a SIGABRT
+with no unwind to catch.
+
+This is the same shape of error as [D29](#d29--a-length-guard-that-only-checked-one-direction): a guard that is real, tested,
+and narrower than the claim written next to it.
+
+### The fix, written and verified
+
+Two commits on `d33-deserialize-no-panic` in the fork clone, **not yet pushed**
+— that is the user's to do:
+
+1. The node-type tag returns `io::Error::new(InvalidData, ...)` instead of
+   panicking, matching what `node_hash/mod.rs:316` already does for an unknown
+   hash tag.
+2. The recursion is bounded at `MAX_FOREST_ROWS`. This is not an arbitrary
+   cap: a root is a perfect tree of at most that many rows, so its leaves sit
+   at most that many levels below it, and anything deeper is not a forest the
+   crate could have written. A spine exactly `MAX_FOREST_ROWS` deep still
+   round-trips; 64 is rejected.
+
+A third commit fixes an unrelated `unwrap()` on the *write* side —
+`serialize` `?`s its two length prefixes and then unwrapped the result of
+writing each root, so a full disk or closed pipe panicked out of a function
+returning `io::Result`.
+
+Verified: all five crash artifacts under `fuzz/artifacts/{forest,snapshot}_decode/`
+now return errors, and they return the *fork's* error
+("unexpected node type for MemForest node"), not the `catch_unwind` fallback —
+which is the evidence the repair is doing the work rather than the containment.
+The full workspace suite passes against the patched fork, `upstream_rustreexo.rs`
+included. Each fork-side regression test was confirmed to fail with only its own
+fix reverted.
+
+**The `catch_unwind` stays** until the pin moves to the pushed revision. It
+costs the fuzzer signal (above), but removing it before the pin moves would
+reopen the panic it was written for.
 
 ---
 

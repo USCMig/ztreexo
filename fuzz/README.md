@@ -19,7 +19,7 @@ scripts/fuzz_72h.sh          # the definition-of-done run
 | `compact_state_decode` | `CompactState::from_bytes` | new in Phase 5b |
 | `wire_request_decode` | `Request::from_bytes` | outermost surface; first thing off a socket |
 | `nonmembership_decode` | `NonMembershipResponse::from_bytes` | the sparse bitmap (D28) |
-| `forest_decode` | `UtxoForest::from_bytes` | upstream recursion; **excluded from the 72 h run**, see D33 |
+| `forest_decode` | `UtxoForest::from_bytes` | upstream recursion; **excluded from the 72 h run**, see D33 — fix written, awaiting a push |
 
 ## The checksum reseal, and how to prove it works
 
