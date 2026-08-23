@@ -1279,6 +1279,97 @@ a proof.
 
 ---
 
+## D36 — Fuzz budget: four of five targets saturated in under two hours
+
+**Phase 6.** Measured mid-run, 38h10m into the 72-hour run launched
+2026-08-22, at ~73 billion total executions.
+
+The run was configured the obvious way: five targets, one core each, the same
+`-max_total_time=259200` for all of them. That allocation turns out to be
+badly wrong, and the run's own logs say so.
+
+### What the 38 hours actually bought
+
+`cov` at `INITED` is what the *seed corpus* already reached. The difference
+between that and the current figure is what 38 hours of fuzzing added.
+
+| target | edges at INITED | edges now | gained | last new edge at | share of run *after* it |
+|---|---|---|---|---|---|
+| `bundle_decode` | 781 | 810 | **+29** | `#1,285,649,323` (~20 h) | 47% |
+| `utxo_proof_decode` | 181 | 184 | +3 | `#101` | ~100% |
+| `compact_state_decode` | 301 | 301 | **0** | never | 100% |
+| `nonmembership_decode` | 323 | 323 | **0** | never | 100% |
+| `wire_request_decode` | 111 | 111 | **0** | never | 100% |
+
+**Five targets, 73 billion executions, 38 hours, 32 new edges** — and 29 of
+them belong to one target. Three targets never reached a single edge their seed
+corpus had not already reached; `nonmembership_decode` reports the identical
+`cov: 323` on every stat line it has ever printed. `utxo_proof_decode` found
+its three at execution **101** and nothing in the 17 billion since.
+
+**A `NEW` line does not mean a new edge**, and conflating the two is how a
+saturated target looks busy. libFuzzer emits `NEW` for a new *feature* — an
+edge-count bucket — so `compact_state_decode` (4 `NEW` lines) and
+`nonmembership_decode` (6) appear to be finding things hours in while their
+coverage has not moved once. An earlier draft of this table read the last `NEW`
+timestamp and reported saturation at "~7 min" and "~2.1 h" for those two; both
+are actually *never*. `scripts/fuzz_saturation.py` tracks the high-water mark of
+`cov` instead, which is why the numbers above come from the tool rather than
+from reading the logs by eye.
+
+### The correction this implies
+
+**More hours is the wrong lever for a saturated target.** A target stuck at the
+same edge count for 34 billion executions is not short of time; mutation cannot
+reach further from the seeds it has. The fix is a better seed corpus or a
+structured `Arbitrary`-based generator that constructs well-formed-ish inputs,
+so the fuzzer spends its budget past the length and magic checks instead of in
+front of them. This is the same lesson as
+[D24](#d24--a-checksum-in-front-of-a-parser-hides-every-check-behind-it),
+one level out: there, a checksum hid the parser from the fuzzer; here, the
+input distribution does.
+
+**So budget the next run per target, not per clock:**
+
+1. **Stop a target on saturation, not on the wall clock.** A workable rule:
+   end it once it has run 10× longer since its last new edge than it took to
+   find that edge. On these numbers four of the five end within minutes and
+   `bundle_decode` wants **~8 days**, not 3 — so the current schedule is
+   simultaneously far too long for most targets and too short for the one that
+   matters. `scripts/fuzz_saturation.py` computes this per target.
+2. **Spend the freed cores on the target still finding things.** libFuzzer
+   parallelises a single target across workers with a shared corpus
+   (`-workers`/`-jobs`). Four idle cores on `bundle_decode` is worth more than
+   four cores confirming that four parsers are still saturated.
+3. **Re-seed rather than re-run.** For any target that gains zero edges,
+   the next iteration's work item is corpus and harness, not schedule.
+4. **Estimating a future run:** the useful unit is *time to last discovery per
+   target*, and on this codebase it spans from execution 101 to ~20 hours. A
+   single figure covering all targets is necessarily wrong in both directions
+   at once. Budget `bundle_decode`-class targets in **days** and treat the rest
+   as a seeding problem. Run `scripts/fuzz_saturation.py --elapsed-hours H`
+   against the previous run's logs to get the numbers rather than guessing;
+   it works mid-run, so it also answers "is it worth letting this finish?"
+
+### What this does not say
+
+It does not say the run was worthless. Its product is the *absence* of a crash
+across 73 billion executions, and a saturated target still contributes to that
+— it is a negative result about robustness, not about coverage. Phase 6's DoD
+is "fuzzers run 72 h clean," and that is being met.
+
+Nor do the raw coverage percentages mean the parsers are 15–23% tested. The
+instrumented edge count includes dependency code linked into the binary that no
+decode entry point can reach, so the denominator is inflated by an unknown
+amount. The load-bearing number here is the *marginal* one — edges gained
+during the run — which needs no denominator.
+
+`scripts/fuzz_72h.sh` needs the per-target budgeting above, but it is the
+script currently executing this run and bash reads a script by byte offset, so
+the change waits until the run ends.
+
+---
+
 ## D24 — A checksum in front of a parser hides every check behind it
 
 **Phase 3.** Found while merging `main` into the Phase 3 branch, by the coverage
