@@ -65,3 +65,22 @@ INFO: seed corpus: files: 61 min: 1b max: 558b total: 6747b rss: 57Mb
 #1073741824	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 131024 rss: 702Mb
 #2147483648	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 135206 rss: 702Mb
 #4294967296	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 137562 rss: 702Mb
+#8589934592	pulse  cov: 301 ft: 680 corp: 63/14696b lim: 4096 exec/s: 133340 rss: 702Mb
+#12239196692	REDUCE cov: 301 ft: 680 corp: 63/14472b lim: 4096 exec/s: 134801 rss: 702Mb L: 657/3057 MS: 4 ChangeByte-EraseBytes-PersAutoDict-CMP- DE: "\000\000\000\000\000\000\000\002"-"@\376\017\237\020\017\000\000"-
+#12383919217	REDUCE cov: 301 ft: 680 corp: 63/14408b lim: 4096 exec/s: 134876 rss: 702Mb L: 593/3057 MS: 4 EraseBytes-PersAutoDict-ChangeBinInt-CrossOver- DE: "\377\377\377\377"-
+#17179869184	pulse  cov: 301 ft: 680 corp: 63/14408b lim: 4096 exec/s: 135742 rss: 702Mb
+#34359738368	pulse  cov: 301 ft: 680 corp: 63/14408b lim: 4096 exec/s: 136471 rss: 702Mb
+#35391191087	DONE   cov: 301 ft: 680 corp: 63/14408b lim: 4096 exec/s: 136539 rss: 702Mb
+###### Recommended dictionary. ######
+"\377\377" # Uses: 713233110
+"\000\000\000\000\000\000\000\002" # Uses: 675252219
+"\377\377\377\377" # Uses: 688817144
+"\001\000" # Uses: 710794853
+"@\376\017\237\020\017\000\000" # Uses: 406319154
+###### End of recommended dictionary. ######
+Done 35391191087 runs in 259201 second(s)
+stat::number_of_executed_units: 35391191087
+stat::average_exec_per_sec:     136539
+stat::new_units_added:          31
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              702

@@ -59,24 +59,31 @@ the length prefixes instead of testing the parser.
 
 ## Budgeting a run
 
-**Do not give every target the same wall clock.** Measured 38 h into the
-2026-08-22 72-hour run (`docs/design.md`
+**Do not give every target the same wall clock.** The 2026-08-22 72-hour run
+finished clean — 206 billion executions, no crashes — and produced **34 new
+edges, 31 of them in one target** (`docs/design.md`
 [D36](../docs/design.md#d36--fuzz-budget-four-of-five-targets-saturated-in-under-two-hours)):
-five targets, 73 billion executions, **32 new edges between them — 29 of which
-belong to one target.**
 
 | target | edges gained | last new edge | budget after it |
 |---|---|---|---|
-| `bundle_decode` | +29 | ~20 h in | 47% |
+| `bundle_decode` | +31 | **71.5 h in** | 0.6% |
 | `utxo_proof_decode` | +3 | execution **101** | ~100% |
 | `compact_state_decode` | 0 | never | 100% |
 | `nonmembership_decode` | 0 | never | 100% |
 | `wire_request_decode` | 0 | never | 100% |
 
-Get these for any run — including one still going — with:
+Four targets were done in minutes; `bundle_decode` was **still finding edges
+when the clock cut it off**, with its last one twenty-five minutes before the
+end. Do not read a quiet stretch as exhaustion — its gaps between discoveries
+ran 3.0 billion executions and then 0.34 billion. Discovery is bursty.
+
+`scripts/fuzz_72h.sh` now encodes this: 7 days and `-fork=8` for
+`bundle_decode`, 24 h each for the rest, and it runs the analysis itself when
+it finishes. Get the same for any run, including one still going:
 
 ```bash
-scripts/fuzz_saturation.py --elapsed-hours 38
+scripts/fuzz_saturation.py                      # a finished run states its own duration
+scripts/fuzz_saturation.py --elapsed-hours 38   # mid-run
 ```
 
 Read it rather than reading the logs by eye: **a `NEW` line is a new *feature*,
@@ -89,9 +96,11 @@ for all targets is wrong in both directions at once. Before the next run:
 
 - **End a target on saturation, not on the clock** — e.g. once it has run 10×
   longer since its last new edge than it took to find that edge.
-- **Give the freed cores to the target still finding things**, via libFuzzer's
-  `-workers`/`-jobs` on a shared corpus. Four cores confirming four parsers are
-  still saturated is worth less than four cores on `bundle_decode`.
+- **Give the freed cores to the target still finding things**, via `-fork=N`.
+  Use fork mode, not `-jobs=N -workers=N`: `-jobs` scatters `fuzz-<n>.log` into
+  the current directory and leaves the main log holding one worker's numbers,
+  so the analysis under-reports. Two forks took `bundle_decode` from ~18k to
+  ~40k exec/s.
 - **A target that gains zero edges needs seeds, not hours.** Being stuck at the
   same edge count for tens of billions of executions means mutation cannot get
   further from the corpus it has. Improve the seeds or add a structured

@@ -6,3 +6,14 @@
 [2026-08-22T05:43:59+00:00] launching wire_request_decode for 259200s
 [2026-08-22T05:43:59+00:00] launching nonmembership_decode for 259200s
 [2026-08-22T05:43:59+00:00] all launched; waiting
+[2026-08-25T05:44:01+00:00] all targets finished
+[2026-08-25T05:44:01+00:00] bundle_decode: artifacts=0
+0 execs=4688783763
+[2026-08-25T05:44:01+00:00] utxo_proof_decode: artifacts=0
+0 execs=42114030724
+[2026-08-25T05:44:01+00:00] compact_state_decode: artifacts=0
+0 execs=35391191087
+[2026-08-25T05:44:01+00:00] wire_request_decode: artifacts=0
+0 execs=119469880624
+[2026-08-25T05:44:01+00:00] nonmembership_decode: artifacts=0
+0 execs=4995563476

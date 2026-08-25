@@ -36,3 +36,12 @@ INFO: seed corpus: files: 18 min: 1b max: 204b total: 365b rss: 58Mb
 #4294967296	pulse  cov: 111 ft: 145 corp: 14/118b lim: 4096 exec/s: 443603 rss: 567Mb
 #8589934592	pulse  cov: 111 ft: 145 corp: 14/118b lim: 4096 exec/s: 450962 rss: 567Mb
 #17179869184	pulse  cov: 111 ft: 145 corp: 14/118b lim: 4096 exec/s: 464659 rss: 567Mb
+#34359738368	pulse  cov: 111 ft: 145 corp: 14/118b lim: 4096 exec/s: 459575 rss: 567Mb
+#68719476736	pulse  cov: 111 ft: 145 corp: 14/118b lim: 4096 exec/s: 464173 rss: 567Mb
+#119469880624	DONE   cov: 111 ft: 145 corp: 14/118b lim: 4096 exec/s: 460915 rss: 567Mb
+Done 119469880624 runs in 259201 second(s)
+stat::number_of_executed_units: 119469880624
+stat::average_exec_per_sec:     460915
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              567

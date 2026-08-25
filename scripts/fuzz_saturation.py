@@ -37,6 +37,23 @@ from pathlib import Path
 STAT = re.compile(r"^#(\d+)\s+(\w+)\s+cov:\s*(\d+)\s+ft:\s*(\d+)")
 # "INFO: Loaded 1 modules   (735 inline 8-bit counters): ..."
 EDGES = re.compile(r"\((\d+) inline 8-bit counters\)")
+# "Done 4688783763 runs in 259201 second(s)" -- only on a run that finished.
+#
+# Worth preferring over the last `#N` line: libFuzzer prints `pulse` lines at
+# powers of two, so the highest `#N` seen mid-run understates the true total,
+# badly for a fast target. `wire_request_decode` last pulsed at #68,719,476,736
+# (2**36) having actually executed 119,469,880,624 -- a 42% undercount, which
+# feeds straight into the "share of budget after last discovery" column.
+DONE = re.compile(r"^Done (\d+) runs in (\d+) second")
+# Fork mode (`-fork=N`) speaks a different dialect:
+#   "#108147: cov: 823 ft: 2843 corp: 264 exec/s: 54073 ... time: 2s job: 1 ..."
+# Note the colon after the count and the absence of a keyword like NEW/pulse.
+# Fork mode also prints no `INITED` line, no `Done ... runs`, and no `stat::`
+# block, so a fork log parsed with the regexes above yields *nothing at all* --
+# a silent empty report, which is the failure this whole script exists to avoid.
+# It does carry a running `time: Ns`, which stands in for the `Done` line.
+FORK_STAT = re.compile(r"^#(\d+):\s+cov:\s*(\d+)\s+ft:\s*(\d+)")
+FORK_TIME = re.compile(r"\btime:\s*(\d+)s\b")
 
 # Logs that are not a fuzz target's.
 SKIP = {"build", "driver"}
@@ -53,12 +70,21 @@ class Target:
     final_ft: int
     last_new_exec: int | None  # None => never found a new edge
     new_count: int
+    total_seconds: int | None = None  # set only when the run finished
+    fork_baseline_cov: int | None = None  # `-fork=N` runs: no INITED exists
 
     @property
     def edges_gained(self) -> int | None:
-        if self.inited_cov is None:
+        """Edges reached beyond the baseline, or None if there is no baseline."""
+        baseline = self.inited_cov if self.inited_cov is not None else self.fork_baseline_cov
+        if baseline is None:
             return None
-        return self.final_cov - self.inited_cov
+        return self.final_cov - baseline
+
+    @property
+    def baseline_is_approximate(self) -> bool:
+        """True when the baseline came from fork mode's first line, not INITED."""
+        return self.inited_cov is None and self.fork_baseline_cov is not None
 
     @property
     def saturated_at(self) -> int:
@@ -83,12 +109,36 @@ def parse_lines(name: str, lines: list[str]) -> Target | None:
     last_new_exec = None
     new_count = 0
     best_cov = 0
+    done_exec = done_seconds = None
+    fork_baseline_cov = None
 
     for line in lines:
         if instrumented is None:
             m = EDGES.search(line)
             if m:
                 instrumented = int(m.group(1))
+        m = DONE.match(line)
+        if m:
+            done_exec, done_seconds = int(m.group(1)), int(m.group(2))
+            continue
+        m = FORK_STAT.match(line)
+        if m:
+            execs, cov, ft = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            final_exec, final_cov, final_ft = execs, cov, ft
+            tm = FORK_TIME.search(line)
+            if tm:
+                done_seconds = int(tm.group(1))
+            if fork_baseline_cov is None:
+                # Fork mode gives no INITED, so the earliest line it prints is
+                # the closest available baseline. It is already a couple of
+                # seconds of fuzzing in, so treat it as approximate -- reported
+                # separately from a real INITED, never merged with one.
+                fork_baseline_cov = cov
+                best_cov = cov
+            elif cov > best_cov:
+                best_cov = cov
+                last_new_exec = execs
+            continue
         m = STAT.match(line)
         if not m:
             continue
@@ -117,11 +167,14 @@ def parse_lines(name: str, lines: list[str]) -> Target | None:
         instrumented=instrumented,
         inited_cov=inited_cov,
         inited_ft=inited_ft,
-        final_exec=final_exec,
+        fork_baseline_cov=fork_baseline_cov,
+        # Exact when the run finished; the last pulse (a power of two) otherwise.
+        final_exec=done_exec if done_exec is not None else final_exec,
         final_cov=final_cov,
         final_ft=final_ft,
         last_new_exec=last_new_exec,
         new_count=new_count,
+        total_seconds=done_seconds,
     )
 
 
@@ -166,6 +219,30 @@ def _assert_new_lines_are_not_treated_as_edges() -> None:
     assert abs(t.wasted_fraction - 0.5) < 1e-9, t.wasted_fraction
 
 
+def _assert_fork_logs_are_not_silently_empty() -> None:
+    """`-fork=N` logs must parse, or a parallel run reports nothing.
+
+    Fork mode prints no INITED, no `Done ... runs` and no `stat::` block, and
+    its per-line format differs from the sequential one. Parsed with only the
+    sequential regexes a fork log yields zero stat lines, `parse_lines` returns
+    None, and the target vanishes from the report -- looking exactly like a
+    target that was never run.
+    """
+    fork = [
+        "INFO: -fork=2: fuzzing in separate process(s)",
+        "#108147: cov: 823 ft: 2843 corp: 264 exec/s: 54073 oom/timeout/crash: 0/0/0 time: 2s job: 1 dft_time: 0",
+        "#601553: cov: 830 ft: 2844 corp: 265 exec/s: 40922 oom/timeout/crash: 0/0/0 time: 8s job: 4 dft_time: 0",
+        "#2142573: cov: 830 ft: 2845 corp: 266 exec/s: 38647 oom/timeout/crash: 0/0/0 time: 30s job: 9 dft_time: 0",
+    ]
+    t = parse_lines("forked", fork)
+    assert t is not None, "a fork log must not parse to nothing"
+    assert t.final_exec == 2142573, t.final_exec
+    assert t.total_seconds == 30, t.total_seconds
+    assert t.baseline_is_approximate, "fork mode has no INITED; baseline is approximate"
+    assert t.edges_gained == 7, t.edges_gained
+    assert t.last_new_exec == 601553, t.last_new_exec
+
+
 def human_time(hours: float) -> str:
     if hours < 1 / 60:
         return "<1 min"
@@ -193,6 +270,7 @@ def main() -> int:
     args = ap.parse_args()
 
     _assert_new_lines_are_not_treated_as_edges()
+    _assert_fork_logs_are_not_silently_empty()
     if args.self_test:
         print("fuzz_saturation: self-check passed")
         return 0
@@ -225,14 +303,18 @@ def main() -> int:
         total_exec += t.final_exec
         gained = t.edges_gained
         total_gained += gained or 0
-        if t.inited_cov is None:
-            edges = f"{t.final_cov} (no INITED)"
+        if gained is None:
+            edges = f"{t.final_cov} (no baseline)"
         else:
-            edges = f"{t.inited_cov}->{t.final_cov} ({gained:+d})"
+            base = t.inited_cov if t.inited_cov is not None else t.fork_baseline_cov
+            mark = "~" if t.baseline_is_approximate else ""
+            edges = f"{mark}{base}->{t.final_cov} ({gained:+d})"
+        # A finished run states its own duration, so no flag is needed for it.
+        hours = t.total_seconds / 3600 if t.total_seconds is not None else e
         if t.last_new_exec is None:
             when = "never"
-        elif e is not None:
-            when = human_time(e * t.last_new_exec / t.final_exec)
+        elif hours is not None:
+            when = human_time(hours * t.last_new_exec / t.final_exec)
         else:
             when = f"#{t.last_new_exec:,}"
         print(f"{t.name:<24} {edges:>13} {when:>16} {t.wasted_fraction:>9.1%}")
@@ -251,17 +333,20 @@ def main() -> int:
     # The scheduling rule from D36: run 10x past the last discovery.
     print()
     print("Suggested budget for the next run (10x time-to-last-discovery):")
+    unknown_elapsed = False
     for t in targets:
+        elapsed = t.total_seconds / 3600 if t.total_seconds is not None else e
         if t.last_new_exec is None:
             print(f"  {t.name:<24} minutes -- re-seed instead")
-        elif e is not None:
-            hours = 10 * e * t.last_new_exec / t.final_exec
+        elif elapsed is not None:
+            hours = 10 * elapsed * t.last_new_exec / t.final_exec
             print(f"  {t.name:<24} {human_time(hours)}")
         else:
+            unknown_elapsed = True
             print(f"  {t.name:<24} {10 * t.last_new_exec:,} executions")
-    if e is None:
+    if unknown_elapsed:
         print()
-        print("(pass --elapsed-hours to get these as times)")
+        print("(run still going: pass --elapsed-hours to get these as times)")
     return 0
 
 

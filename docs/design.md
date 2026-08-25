@@ -1281,8 +1281,15 @@ a proof.
 
 ## D36 — Fuzz budget: four of five targets saturated in under two hours
 
-**Phase 6.** Measured mid-run, 38h10m into the 72-hour run launched
-2026-08-22, at ~73 billion total executions.
+**Phase 6.** The 72-hour run launched 2026-08-22 finished 2026-08-25 05:44:01
+with **zero crashes, zero hangs, zero OOMs across all five targets** and
+**206,659,449,674 executions**. Phase 6's DoD ("fuzzers run 72 h clean") is met
+for the five included targets; `forest_decode` and `snapshot_decode` remain
+excluded on [D33](#d33--memforestdeserialize-is-not-total-on-malformed-input)
+and owe their own run once the fork fix is pushed.
+
+What follows is about how that budget was *spent*, which is where the run has
+something to teach.
 
 The run was configured the obvious way: five targets, one core each, the same
 `-max_total_time=259200` for all of them. That allocation turns out to be
@@ -1293,19 +1300,48 @@ badly wrong, and the run's own logs say so.
 `cov` at `INITED` is what the *seed corpus* already reached. The difference
 between that and the current figure is what 38 hours of fuzzing added.
 
-| target | edges at INITED | edges now | gained | last new edge at | share of run *after* it |
-|---|---|---|---|---|---|
-| `bundle_decode` | 781 | 810 | **+29** | `#1,285,649,323` (~20 h) | 47% |
-| `utxo_proof_decode` | 181 | 184 | +3 | `#101` | ~100% |
-| `compact_state_decode` | 301 | 301 | **0** | never | 100% |
-| `nonmembership_decode` | 323 | 323 | **0** | never | 100% |
-| `wire_request_decode` | 111 | 111 | **0** | never | 100% |
+| target | edges at INITED | final | gained | executions | last new edge | share of run after it |
+|---|---|---|---|---|---|---|
+| `bundle_decode` | 781 | 812 | **+31** | 4.7e9 | **71.5 h** | 0.6% |
+| `utxo_proof_decode` | 181 | 184 | +3 | 42.1e9 | `#101` | ~100% |
+| `compact_state_decode` | 301 | 301 | **0** | 35.4e9 | never | 100% |
+| `nonmembership_decode` | 323 | 323 | **0** | 5.0e9 | never | 100% |
+| `wire_request_decode` | 111 | 111 | **0** | 119.5e9 | never | 100% |
 
-**Five targets, 73 billion executions, 38 hours, 32 new edges** — and 29 of
+**Five targets, 206 billion executions, 72 hours, 34 new edges** — and 31 of
 them belong to one target. Three targets never reached a single edge their seed
 corpus had not already reached; `nonmembership_decode` reports the identical
 `cov: 323` on every stat line it has ever printed. `utxo_proof_decode` found
-its three at execution **101** and nothing in the 17 billion since.
+its three at execution **101** and nothing in the 42 billion since.
+
+### `bundle_decode` was not saturated — the clock cut it off
+
+Its full discovery trace, by execution count:
+
+| edge | at | ≈ elapsed |
+|---|---|---|
+| 809 | 566M | 8.7 h |
+| 810 | 1.29e9 | 19.7 h |
+| 811 | 4.32e9 | 66.3 h |
+| **812** | **4.66e9** | **71.5 h** |
+
+The last edge landed with about twenty-five minutes left on a 72-hour clock.
+So the budget was simultaneously three days too long for four targets and *too
+short* for the fifth.
+
+**This refutes an intermediate call recorded here.** Mid-run, `bundle_decode`
+had been quiet for 33 hours and I judged the 10×-past-last-discovery rule to be
+over-extrapolating, and advised planning ~2 days for it and spending the
+surplus on seeds. Two edges then arrived at 66.3 h and 71.5 h. Cutting at two
+days would have missed both.
+
+The error was reading a quiet stretch as exhaustion. Discovery here is
+**bursty, not smoothly decaying**: the gap from 810 to 811 was 3.0 billion
+executions, and the gap from 811 to 812 only 0.34 billion. On a target with
+this much surface — 3,451 instrumented edges against a 289-file corpus — a day
+of silence carries much less information than it feels like it does. The
+mechanical rule was right and the judgement call over it was wrong, which is
+the reason the rule is written down.
 
 **A `NEW` line does not mean a new edge**, and conflating the two is how a
 saturated target looks busy. libFuzzer emits `NEW` for a new *feature* — an
@@ -1333,23 +1369,35 @@ input distribution does.
 
 1. **Stop a target on saturation, not on the wall clock.** A workable rule:
    end it once it has run 10× longer since its last new edge than it took to
-   find that edge. On these numbers four of the five end within minutes and
-   `bundle_decode` wants **~8 days**, not 3 — so the current schedule is
-   simultaneously far too long for most targets and too short for the one that
-   matters. `scripts/fuzz_saturation.py` computes this per target.
-2. **Spend the freed cores on the target still finding things.** libFuzzer
-   parallelises a single target across workers with a shared corpus
-   (`-workers`/`-jobs`). Four idle cores on `bundle_decode` is worth more than
-   four cores confirming that four parsers are still saturated.
+   find that edge. On the final numbers four of the five end within minutes and
+   `bundle_decode` wants **~30 days** — the rule's output grows each time a late
+   edge lands, which is the behaviour you want from a stopping rule and not a
+   literal schedule. `scripts/fuzz_72h.sh` now encodes 7 days for
+   `bundle_decode` and 24 h for the rest;
+   `scripts/fuzz_saturation.py` recomputes it after any run.
+2. **Spend the freed cores on the target still finding things**, with
+   `-fork=N` — *not* `-jobs=N -workers=N`. Measured, `-jobs` writes each
+   worker's output to `fuzz-<n>.log` in the current directory and leaves the
+   main log carrying one worker's numbers, so the run's own analysis silently
+   under-reports; fork mode keeps a single stream and merges the workers'
+   corpora. Two forks took `bundle_decode` from ~18k to ~40k exec/s.
+
+   Fork mode prints no `INITED`, no `Done ... runs` and no `stat::` block, and
+   its stat lines have a different shape, so it needed explicit parser support
+   — without it a parallel run's log yields an empty report that looks exactly
+   like a target that never ran. Both dialects are covered by self-checks that
+   run on every invocation.
 3. **Re-seed rather than re-run.** For any target that gains zero edges,
    the next iteration's work item is corpus and harness, not schedule.
 4. **Estimating a future run:** the useful unit is *time to last discovery per
-   target*, and on this codebase it spans from execution 101 to ~20 hours. A
+   target*, and on this codebase it spans from execution 101 to 71.5 hours. A
    single figure covering all targets is necessarily wrong in both directions
-   at once. Budget `bundle_decode`-class targets in **days** and treat the rest
-   as a seeding problem. Run `scripts/fuzz_saturation.py --elapsed-hours H`
-   against the previous run's logs to get the numbers rather than guessing;
-   it works mid-run, so it also answers "is it worth letting this finish?"
+   at once. Budget `bundle_decode`-class targets in **weeks** and treat the rest
+   as a seeding problem. Run `scripts/fuzz_saturation.py` against the previous
+   run's logs rather than guessing — it needs no arguments once a run has
+   finished, and mid-run with `--elapsed-hours H` it answers "is this worth
+   letting finish?". Note the answer it would have given at 38 h here, and that
+   the honest reading of it was still to let the run finish.
 
 ### What this does not say
 
@@ -1364,9 +1412,13 @@ decode entry point can reach, so the denominator is inflated by an unknown
 amount. The load-bearing number here is the *marginal* one — edges gained
 during the run — which needs no denominator.
 
-`scripts/fuzz_72h.sh` needs the per-target budgeting above, but it is the
-script currently executing this run and bash reads a script by byte offset, so
-the change waits until the run ends.
+`scripts/fuzz_72h.sh` now carries the per-target budgeting above, applied once
+the run ended — a script that is executing is not a file to edit, since bash
+reads it by byte offset. The same pass fixed a reporting bug in it:
+`ls | grep -c .` exits 1 on an empty directory, so the `|| echo 0` fallback
+appended a *second* line and every completion line in `driver.log` read
+`artifacts=0` followed by a stray `0`. The counts were right; the log was
+malformed. `wc -l` replaces it.
 
 ---
 

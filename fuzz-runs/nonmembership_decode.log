@@ -116,3 +116,30 @@ INFO: seed corpus: files: 71 min: 1b max: 1129b total: 10361b rss: 57Mb
 #536870912	pulse  cov: 323 ft: 945 corp: 67/11406b lim: 4096 exec/s: 19015 rss: 450Mb
 #698400125	REDUCE cov: 323 ft: 945 corp: 67/11310b lim: 4096 exec/s: 19220 rss: 450Mb L: 701/1312 MS: 5 EraseBytes-CopyPart-CopyPart-PersAutoDict-EraseBytes- DE: "\023\000\000\000"-
 #1073741824	pulse  cov: 323 ft: 945 corp: 67/11310b lim: 4096 exec/s: 18984 rss: 450Mb
+#1756224831	REDUCE cov: 323 ft: 945 corp: 67/11309b lim: 4096 exec/s: 19058 rss: 450Mb L: 90/1312 MS: 1 EraseBytes-
+#1951197916	REDUCE cov: 323 ft: 945 corp: 67/11308b lim: 4096 exec/s: 19064 rss: 450Mb L: 185/1312 MS: 5 CrossOver-ChangeByte-EraseBytes-InsertRepeatedBytes-CopyPart-
+#2147483648	pulse  cov: 323 ft: 945 corp: 67/11308b lim: 4096 exec/s: 19145 rss: 450Mb
+#4294967296	pulse  cov: 323 ft: 945 corp: 67/11308b lim: 4096 exec/s: 19242 rss: 451Mb
+#4995563476	DONE   cov: 323 ft: 945 corp: 67/11308b lim: 4096 exec/s: 19272 rss: 451Mb
+###### Recommended dictionary. ######
+"\001\000\000\000\000\000\000X" # Uses: 32042898
+"\223\250@\221D^\265\020X\022\321\354\371+\270\345\034\036\242\3344\035\273\364\216Z\220\260tER\275" # Uses: 31661934
+"\001\000\000\000\000\000\000\020" # Uses: 32035198
+"\001\000\000M" # Uses: 32269688
+"\023\000\000\000" # Uses: 32275235
+"\272\321\3429\246\235\220\245\341(\321\272]s\321\235\323\210\032-n\351\377Q=NG\201\344c\224%" # Uses: 31390663
+"\273\225E\031\325l\213\224\307\374\002\253\214dH[;\031\003,r\355\200O\241\300\212GKv\313\322" # Uses: 31391182
+"<\203\276\271\361\200\006\013q[\007h\314\371\311\220(t8\310\360\264\020r\374\227\355RW3^z" # Uses: 31058740
+"\000\000\000\000\000\000\0001" # Uses: 31412716
+"\272\000" # Uses: 32266425
+"\001h" # Uses: 31904136
+"\230\326\212_\011m\011\330\253x\214\266\353\006\200\277\207\204\307\312\233\277\020\317`\344\332\232\253;\232\244" # Uses: 30376078
+"\247\335G'\0309ilS\365o}\250\336\240\036\000\321~:\035\361\010\257\330\0265j\231&\"\311" # Uses: 29646917
+"\220\201\000\027\332^\215S\007\313\216\201\271\334v\334L&\236\023\317\024\225\250\313)\261\273K\007^\372" # Uses: 29562847
+###### End of recommended dictionary. ######
+Done 4995563476 runs in 259201 second(s)
+stat::number_of_executed_units: 4995563476
+stat::average_exec_per_sec:     19272
+stat::new_units_added:          82
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              451
