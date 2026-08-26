@@ -1,0 +1,20 @@
+   Compiling zutreexo-fuzz v0.0.0 (/home/blocknodes/ztreexo/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.42s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+   Compiling zutreexo-fuzz v0.0.0 (/home/blocknodes/ztreexo/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.24s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+   Compiling zutreexo-fuzz v0.0.0 (/home/blocknodes/ztreexo/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.32s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+   Compiling zutreexo-fuzz v0.0.0 (/home/blocknodes/ztreexo/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.28s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+   Compiling zutreexo-fuzz v0.0.0 (/home/blocknodes/ztreexo/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: halo2_gadgets v0.5.0, primitive-types v0.12.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

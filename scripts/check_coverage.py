@@ -67,10 +67,25 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # The load-bearing file. CLAUDE.md Phase 1 wants 100% *branch* coverage
     # here; it is at 58/70. Stage 2c raised both the numerator and the
     # denominator by adding `undo_insert`.
+    # Phase 1's definition of done, and the only file in the workspace whose
+    # branch floor is *exact* rather than set a couple below the observed
+    # minimum.
+    #
+    # It can be exact because `tests/imt_branches.rs` is deterministic — fixed
+    # inputs, named expected errors, no generation — so this figure does not
+    # move between runs the way the proptest-driven files do. That was the
+    # blocker recorded in PLAN.md: a gate on a number that wanders gets
+    # switched off, and takes the stable ratchets with it.
+    #
+    # 83 of 88. The five missing sides are defensive guards no public call can
+    # reach; they are enumerated in CLAUDE.md's amended Phase 1 DoD, and
+    # deleting them to reach 88 would trade a real safety net for a number.
+    # If this ever reads above 83, something became reachable that was not —
+    # find out what before raising the floor.
     "crates/zutreexo-accumulator/src/imt.rs": {
-        "regions": 96.8,
-        "lines": 96.4,
-        "min_branches": 56,  # measured 58/70
+        "regions": 97.4,
+        "lines": 98.3,
+        "min_branches": 83,  # exact: 83/88, five unreachable guards excluded
     },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average.
@@ -214,6 +229,16 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # PLAN.md records that shadow.rs's own `unwind` is untested in anger. This
     # entry is why that has to be said out loud rather than inferred from a
     # coverage number.
+    # Phase 6's DoS measurement. Same category: it loads a 6 GB tip snapshot and
+    # times proof generation against 27.5M real outputs, which no test
+    # environment can do. The proof paths it times are covered in
+    # zutreexo-accumulator.
+    "crates/zutreexo-testkit/src/bin/dos_cost.rs": {
+        "never_measured": (
+            "operational entry point — measures per-proof cost against a "
+            "loaded mainnet snapshot. Reporting only; it computes no state."
+        ),
+    },
     "crates/zutreexo-testkit/src/bin/shadow.rs": {
         "never_measured": (
             "operational entry point — follows a live zebrad at chain tip. Its "
@@ -251,10 +276,22 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 91.3,
         "min_branches": 6,  # measured 8/8
     },
+    # Phase 6 raised regions and lowered lines here, and both moved for the same
+    # reason: the hardening in D34 added code whose *happy* paths are all tested
+    # (timeouts, the total deadline, the response cap, rate limiting) and whose
+    # error edges are i/o failures — `set_read_timeout` returning Err,
+    # `write_all` failing mid-header, `accept` failing. Those need a socket to
+    # fail on demand, which is the fault-injection harness the comment above
+    # already says this phase did not build.
+    #
+    # Regions ratcheted up 88.3 -> 89.5 (measured 89.58) to lock in the gain.
+    # Lines lowered 92.5 -> 91.9 (measured 91.98): a deliberate reduction,
+    # declared here in the same change per this file's own rule rather than
+    # worked around.
     "crates/zutreexo-bridge/src/server.rs": {
-        "regions": 88.3,
-        "lines": 92.5,
-        "min_branches": 13,  # measured 15/16
+        "regions": 89.5,
+        "lines": 91.9,
+        "min_branches": 13,  # measured 22/24
     },
     "crates/zutreexo-bridge/src/lib.rs": {
         "regions": 86.9,
@@ -355,7 +392,36 @@ def unexercised(summary: dict) -> bool:
     return True
 
 
+def _assert_no_duplicate_floors() -> None:
+    """Fail loudly if a path is listed twice in FLOORS.
+
+    A duplicate key in a Python dict literal is not an error: the last one
+    silently wins. That is exactly what happened on 2026-08-22 — `gap_cost.rs`
+    was already registered as never-measured and a second, identical entry was
+    added below it. Nothing complained, and the only reason it was noticed was
+    an unrelated grep.
+
+    The failure mode is worse than untidiness. A later entry with *different*
+    floors would silently replace the earlier one, quietly lowering a gate that
+    still looked present in the file.
+    """
+    import ast
+
+    with open(__file__, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        seen: set[str] = set()
+        for key in keys:
+            if key in seen:
+                raise SystemExit(f"check_coverage.py lists {key!r} twice; the second entry silently wins")
+            seen.add(key)
+
+
 def main(argv: list[str]) -> int:
+    _assert_no_duplicate_floors()
     if len(argv) != 2:
         print(f"usage: {argv[0]} <llvm-cov-export.json>", file=sys.stderr)
         return 2

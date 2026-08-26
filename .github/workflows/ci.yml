@@ -102,6 +102,14 @@ jobs:
       - name: Enforce floors
         run: python3 scripts/check_coverage.py coverage.json
 
+      # Not coverage, but the same class of tool: a script whose whole job is
+      # to report a number correctly. Its self-check guards the one distinction
+      # it exists to make -- a libFuzzer `NEW` line is a new *feature*, not a
+      # new edge -- which D36 records getting wrong by hand first. Needs no
+      # logs, so it costs nothing to keep honest here.
+      - name: Fuzz saturation parser self-check
+        run: python3 scripts/fuzz_saturation.py --self-test
+
       # Kept regardless of outcome: when the job fails, the report is the first
       # thing anyone wants.
       - name: Upload report

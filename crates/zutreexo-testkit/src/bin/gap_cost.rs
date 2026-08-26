@@ -45,6 +45,7 @@
 //!
 //! ```text
 //! ZUTREEXO_RPC=127.0.0.1:8232 ZUTREEXO_GAP_BLOCKS=50000 \
+//!   ZUTREEXO_GAP_END=1700000 \
 //!   cargo run --release -p zutreexo-testkit --bin gap_cost
 //! ```
 
@@ -102,14 +103,26 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let start = tip.saturating_sub(span);
+    // The window ends at tip unless told otherwise.
+    //
+    // **`ZUTREEXO_GAP_END` exists because the original could only measure one
+    // era, and `docs/design.md` D32 is about exactly that mistake.** The
+    // transparent-bandwidth figure in Phase 4b was measured over heights
+    // 0-150,000 and read as a property of the design; measured at tip it
+    // inverted, and it nearly decided what this project ships. D32's closing
+    // note flags this binary's own headline as needing the same check, since
+    // Zcash's history is not homogeneous — a pre-NU5 window reveals almost no
+    // nullifiers per block, and the comparison against scanning turns on that
+    // rate.
+    let end = env_u32("ZUTREEXO_GAP_END", tip).min(tip);
+    let start = end.saturating_sub(span);
 
-    println!("gap_cost: sampling heights {start}..={tip} (the most recent {span} blocks)");
+    println!("gap_cost: sampling heights {start}..={end} (node tip is {tip})");
     println!("proof depth {depth}\n");
 
-    let sampled = sample(&source, start, tip);
+    let sampled = sample(&source, start, end);
     let proof = measure_proof_size(depth);
-    report(&sampled, &proof, depth, start, tip);
+    report(&sampled, &proof, depth, start, end);
 }
 
 /// Walks the range and records what each block would cost a scanning wallet.

@@ -26,6 +26,7 @@ publish = false
 zutreexo-accumulator = { path = "crates/zutreexo-accumulator", version = "0.0.0" }
 zutreexo-chain = { path = "crates/zutreexo-chain", version = "0.0.0" }
 zutreexo-csn = { path = "crates/zutreexo-csn", version = "0.0.0" }
+zutreexo-bridge = { path = "crates/zutreexo-bridge", version = "0.0.0" }
 zutreexo-testkit = { path = "crates/zutreexo-testkit", version = "0.0.0" }
 
 blake2b_simd = "1.0"

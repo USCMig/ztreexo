@@ -1,0 +1,82 @@
+[package]
+name = "zutreexo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# The same fork pin the workspace uses (docs/design.md D25). Without it this
+# crate silently resolves `rustreexo` from crates.io and fuzzes 0.6.0 — code we
+# do not ship. The first run of these targets did exactly that, and the crash
+# it reported named `rustreexo-0.6.0` in the registry path, which is the only
+# reason it was noticed.
+[patch.crates-io]
+rustreexo = { git = "https://github.com/USCMig/rustreexo", rev = "dc368ccc6988f85c0754ef0b1dff9258f2789123" }
+
+# Deliberately outside the workspace. `cargo fuzz` builds with
+# `-Zsanitizer=address` on nightly and its own profile; pulling it into the
+# workspace would put those flags on every ordinary `cargo build` and would
+# make `cargo deny` account for libfuzzer's tree as if it shipped.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+zutreexo-accumulator = { path = "../crates/zutreexo-accumulator" }
+zutreexo-chain = { path = "../crates/zutreexo-chain" }
+zutreexo-csn = { path = "../crates/zutreexo-csn" }
+zutreexo-bridge = { path = "../crates/zutreexo-bridge" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "bundle_decode"
+path = "fuzz_targets/bundle_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "utxo_proof_decode"
+path = "fuzz_targets/utxo_proof_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_decode"
+path = "fuzz_targets/snapshot_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compact_state_decode"
+path = "fuzz_targets/compact_state_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wire_request_decode"
+path = "fuzz_targets/wire_request_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nonmembership_decode"
+path = "fuzz_targets/nonmembership_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "forest_decode"
+path = "fuzz_targets/forest_decode.rs"
+test = false
+doc = false
+bench = false

@@ -30,7 +30,7 @@ infrastructure, `fix/<topic>` for defects.
 | Phase | Scope | Branch | Status |
 |---|---|---|---|
 | 0 | Baseline measurement, fixture capture | — | **complete** — mainnet tip 2026-08-12, [`docs/benchmarks.md`](docs/benchmarks.md) |
-| 1 | Accumulator core: Utreexo wrapper + IMT | — | **complete for the IMT**; transparent side blocked upstream, and one DoD item unmet (below) |
+| 1 | Accumulator core: Utreexo wrapper + IMT | — | **complete** — DoD met as amended 2026-08-22: 100% of *reachable* branches on `imt.rs` (83/88, five unreachable guards enumerated in [`CLAUDE.md`](CLAUDE.md)), reproducible run to run. Transparent side was blocked upstream, now unpinned via a fork ([D25](docs/design.md)) |
 | 2a | Block ingestion, `apply_block` | — | **complete** — real mainnet blocks parse and apply, parser cross-checked against the node |
 | 2b | Differential harness: two oracles, three tiers | `phase-2b-harness` | **complete** — all four slices agree with both oracles; each tier proven by fault injection |
 | 2c | `rollback.rs`, reorg fuzzing | `phase-2c-rollback` | **complete** — 10⁶ randomised reorgs, zero divergence, byte-identical to cold replay |
@@ -40,7 +40,7 @@ infrastructure, `fix/<topic>` for defects.
 | 4b | Sparse wire format, bridge service, served IBD | `phase-4a-bundle` | **complete** — Phase 4 DoD met over a real socket; sparse paths cut wallet proofs 53.2% and bundle overhead 170.5% to 152.6%. Not gRPC ([D27](docs/design.md)) |
 | 5a | Headline measurement: nullifier-check cost vs gap length | `phase-4a-bundle` | **complete** — the claim holds decisively for spend-status queries (317x to 31,705x at a year's gap) and barely at all for full sync (<=14.7% of bytes, 0% of trial decryption) |
 | 5b | Shadow-mode CSN against Zebra, remaining Phase 5 axes | `phase-5b-shadow` | **complete** — storage measured at last (31.7 GiB vs 693 B, ~49M:1), latency p50/p99 over 60k sandblasting blocks and 1,021 at tip, and 500 blocks shadowed at the live tip with zero divergences. Reverses the narrow-or-keep direction: **keep the transparent forest** (below). Shadow is external to Zebra ([D30](docs/design.md)); reorg recovery is a queue for a compact node ([D31](docs/design.md)) |
-| 6 | Fuzzing, DoS analysis, privacy review | — | not started |
+| 6 | Fuzzing, DoS analysis, privacy review | `phase-6-adversarial` | **in progress** — **72 h fuzz run complete 2026-08-25: 206 billion executions, zero crashes across all 5 targets**, so the DoD's fuzzing half is met for those five; two excluded on an upstream panic ([D33](docs/design.md)) — the fork fix is written and verified against all five crash artifacts but **not pushed**, and writing it turned up a second, worse bug in the same function: unbounded recursion overflows the stack on ~4 MB of input, which aborts rather than unwinds, so the `catch_unwind` D33 relied on never covered it. Bridge hardened: slowloris was total denial from one idle socket, now closed ([D34](docs/design.md)). **Privacy review complete and negative** — Phase 5a's headline query cannot be made privately ([D35](docs/design.md)). External review dropped (below). **Fuzz budgeting was wrong in both directions**: three targets gained zero edges in the whole run and `utxo_proof_decode` found its last at execution 101, while `bundle_decode` was **still finding edges 25 minutes before the clock ran out**. `scripts/fuzz_72h.sh` now budgets per target (7 d + `-fork=8` for `bundle_decode`, 24 h for the rest) and runs `scripts/fuzz_saturation.py` itself ([D36](docs/design.md)) |
 | 7 | ZIP draft — gated on 5 and 6 | — | not started |
 
 ## Known gaps, carried deliberately
@@ -56,6 +56,15 @@ to wait out was wrong: the wrapper written to contain it did not. Every decoder
 added from here should get a bit-flip and truncation sweep at the time it is
 written, not at Phase 6.
 
+**Phase 6's external-review DoD is dropped, deliberately.** CLAUDE.md Phase 6
+requires the privacy analysis be "reviewed by someone outside the project" and
+an "external review request to Zcash Foundation / ZODL / Shielded Labs before
+any consensus proposal". Neither is something this repo can satisfy on its own,
+and both only bind before a consensus proposal — which this project is not
+making. Dropped on 2026-08-22 the way the Tachyon gate was, rather than left to
+hold Phase 6 open forever. The analysis is written and stands on its own
+([D35](docs/design.md)); the team will seek outside eyes as availability allows.
+
 **Reorg handling is tested in three of its four parts.** Taken separately,
 because they need different things to test them:
 
@@ -64,7 +73,7 @@ because they need different things to test them:
 | compact node restores a kept state and stays byte-identical to a cold replay | `zutreexo-csn/tests/reorg.rs` | no |
 | deciding *where* to unwind to | `zutreexo-testkit/tests/shadow_fork.rs` | no |
 | reload the bridge snapshot, replay the common prefix | `load` + `apply_block`, covered elsewhere | no |
-| the three composed, against a chain that actually forked | — | **yes** |
+| **the three composed, against a chain that forked** | **`zutreexo-testkit/tests/shadow_reorg.rs`** | **no — closed 2026-08-22** |
 
 `shadow.rs` calls `shadow::find_fork` rather than keeping its own copy, so the
 tested walk is the one that runs. The `reorg.rs` invariant is CLAUDE.md Phase
@@ -72,16 +81,27 @@ tested walk is the one that runs. The `reorg.rs` invariant is CLAUDE.md Phase
 end **byte-identical** to a node that only ever saw the final chain — with both
 blindness checks confirmed firing.
 
-What remains untested is the composition. **The 500-block shadow run of
-2026-08-22 saw zero reorgs over 12h39m**, which was the expected outcome and
-does not change this line: the composed path has still never run against a real
-fork. The failure mode is safe rather than silent — every path in `unwind` ends
-the run with a named reason, and roots are re-compared byte-for-byte after
-rewinding — but "safe when it fails" is not "known to work".
+**Closed with the scripted stub**, which this file previously identified as the
+only one of the three options that belongs in CI. `unwind` moved into
+`zutreexo_testkit::shadow` behind a `ChainView` trait, so a test can drive it
+with a node scripted to fork. The trait returns `BlockSummary` rather than block
+bytes deliberately: deserialisation is covered thoroughly elsewhere, and
+requiring it here would mean fabricating consensus-encoded blocks for two
+divergent chains to exercise a path that never touches a byte.
 
-Closing it needs either a much longer shadow run, testnet (which reorgs far more
-often), or a scripted node stub that serves a fork on demand. The last is the
-only one that belongs in CI.
+Six cases, including the invariant that matters — apply branch A, unwind, apply
+branch B, end **byte-identical** to a node that only ever saw the final chain —
+plus a no-op control and a refusal when the fork predates the snapshot.
+
+Both blindness checks fire. Making `unwind` rewind unconditionally fails the
+no-op control. And the cold-replay comparison turned out to pass whether or not
+the branches differed, so the test now asserts the fixture *is* a reorg;
+confirmed by setting branch B's salt equal to A's, which nothing else in the
+file notices.
+
+**Still true:** mainnet has never reorged under a shadow run. The 500-block run
+of 2026-08-22 saw zero in 12h39m. What is now tested is that the code handles
+one correctly when it comes.
 
 **A full node's reorg data does not fit at tip, which is itself a finding.**
 `RollbackJournal` was built in stage 2c and is the wrong tool at mainnet tip:
@@ -169,42 +189,50 @@ as D24. **Carried forward: Phase 6's deserialisation fuzzing must reseal a valid
 checksum over each mutated payload, or it will spend its entire budget bouncing
 off the checksum and report a clean run having tested nothing.**
 
-**Phase 1 DoD is not met, and by more than it first appeared.** It requires
-*"100% branch coverage on `imt.rs`"*. That criterion had never been measured
-when the phase was called done, because *branch* coverage needs a nightly
-toolchain — stable rejects `-Z coverage-options=branch`.
+**Phase 1's DoD is met, as amended — closed 2026-08-22.** It had been open
+since Phase 1, requiring *"100% branch coverage on `imt.rs`"*, a criterion never
+measured when the phase was called done because *branch* coverage needs nightly.
+First measured 2026-08-16 at **41/48, 85.42%**.
 
-Measured 2026-08-16 on nightly:
+The blocker was never effort. Branch coverage moved between identical runs,
+because the property suites reseed each time: `proof.rs` reported 17/20 and then
+16/20 on byte-identical source while its region and line figures were the same
+to the digit. A ratchet against a wandering number fails at random, and a gate
+that cries wolf gets switched off, taking the stable ratchets with it.
 
-| `imt.rs` | covered | total | % |
-|---|---|---|---|
-| regions | 1027 | 1069 | 96.07% |
-| lines | 592 | 619 | 95.64% |
-| functions | 65 | 68 | 95.59% |
-| **branches** | **41** | **48** | **85.42%** |
+Fixed by `crates/zutreexo-accumulator/tests/imt_branches.rs`: 27 deterministic
+cases — fixed inputs, named expected errors, nothing generated — covering every
+path a caller reaches by getting something wrong. The happy paths stay with
+proptest, which is what it is for.
 
-The region figure was flattering it. The real gap against the DoD is **7
-uncovered branches** — which is small enough to close deliberately, and is the
-right way to read it rather than as a percentage.
+| `imt.rs` | before | after |
+|---|---|---|
+| regions | 96.07% | **97.41%** |
+| lines | 95.64% | **98.33%** |
+| branches | 75/88 | **83/88** |
 
-`scripts/check_coverage.py` enforces per-file floors so coverage can only
-improve, and the CI job runs on nightly for the same reason.
+Measured twice back to back: **identical**. That is what makes the gate
+enforceable, and `imt.rs`'s branch floor is now **exact** rather than set a
+couple below the observed minimum — the only such floor in the workspace.
 
-**Branch coverage is not reproducible between runs**, which constrains how hard
-that gate can be pushed. The property suites drive `proof.rs` and `imt.rs`
-through proptest, which seeds a fresh RNG each run, so which bounds-check
-branches get exercised varies: measured back to back on identical source,
-`proof.rs` reported 17/20 and then 16/20, while its region and line coverage
-were byte-identical both times. On a 20-branch denominator one branch is five
-percentage points, so a zero-tolerance branch ratchet would fail CI at random —
-and a gate that cries wolf gets switched off, taking the stable region and line
-ratchets with it. Branch floors are therefore absolute covered-counts set about
-two branches below the observed minimum; regions and lines stay strict.
+**The remaining five sides are unreachable through the public API**, not merely
+untested, so the DoD is amended in `CLAUDE.md` to *100% of reachable branches*,
+following the precedent set when Phase 2's DoD turned out to name a comparison
+that did not exist. Each is enumerated there. Deleting them to reach 88 would
+trade a real safety net for a number: they exist so a refactor that breaks an
+invariant fails loudly instead of computing a wrong root.
 
-**Making the Phase 1 DoD enforceable therefore needs a deterministic run**, not
-a tighter threshold: a fixed proptest seed, or a separate non-randomised suite
-for `imt.rs`. That is the actual prerequisite for closing the seven branches,
-and it is not blocking stage 2b.
+Two were checked rather than assumed. `verify_insertion`'s capacity guard is
+*shadowed* — the append index equals `leaf_count`, so a count past capacity is
+an index past capacity and `check_path` rejects first; measured at depths 1, 2
+and 3. And `undo_insert`'s `next_index` disjunct is unreachable because one leaf
+points at any given value, while its `next_value` sibling **is** reachable and
+now has its own test, since short-circuit evaluation means one test cannot cover
+both.
+
+**Branch floors elsewhere remain absolute covered-counts set about two below
+the observed minimum**, because every other floored file is still driven by
+proptest and still wanders. Regions and lines stay strict everywhere.
 
 **CI had never executed the `zutreexo-chain` crate, and nobody noticed.**
 Discovered 2026-08-16 when the coverage job first ran on GitHub. Every test that

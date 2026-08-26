@@ -36,6 +36,7 @@
 //! a *specific* nullifier's proof tells the bridge which note is about to be
 //! spent.
 
+pub mod limits;
 pub mod server;
 pub mod wire;
 

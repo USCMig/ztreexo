@@ -942,9 +942,483 @@ more than an order of magnitude in block size and composition.
 
 So every bandwidth or composition figure in `docs/benchmarks.md` names its
 height range, and any that cannot be reproduced in at least two eras is
-provisional. The same caution applies to Phase 5a's headline gap-length result,
-which was measured at tip and should be re-checked against an earlier era before
-it is relied on.
+provisional.
+
+**Phase 5a's headline was re-checked on 2026-08-22 across three eras and
+survives** — unlike the figure that prompted this entry. On one basis (the
+sparse 637-byte proof), a one-note wallet at a 400,000-block gap sees 13,201× in
+the Sapling era, 69,040× at tip, and 107,371× across sandblasting. A spread of
+eight, tracking shielded activity, and never a change of sign.
+
+Re-measuring also caught a second-order version of this entry's own mistake:
+the first write-up compared the new pre-NU5 figure against Phase 5a's published
+31,705×, which predates the sparse encoding and is on the dense 1,362-byte
+basis. Not the wrong era that time — the wrong units.
+
+That is the distinction worth keeping. D32's 73.0% *inverted* between eras; this
+one only changes scale. A result that moves by a factor is era-dependent and
+must name its range; a result that changes sign was never a result.
+
+---
+
+## D33 — `MemForest::deserialize` is not total on malformed input
+
+**Phase 6.** Found by the fuzzer in under 3,000 executions, twenty-five bytes
+long, and reachable from a file on disk.
+
+`MemForest::deserialize` reads an eight-byte node-type field and does
+`_ => panic!("Invalid node type")` (`mem_forest/mod.rs:144`) rather than
+returning the `io::Result` its signature promises. Identical in crates.io 0.6.0
+and in our pinned fork.
+
+The reproducer is `0a00007e7e000000000a000000000000000a00000000000000`.
+
+**Why it matters more than a library nit.** `UtxoForest::from_bytes` is called
+by `store::decode`, so a corrupt or hostile *snapshot file* takes the process
+down. The `snapshot_decode` fuzz target reaches the identical panic through
+`load_bytes`. CLAUDE.md §5 rule 3 forbids exactly this — "a panic in block
+application is a remote crash vector" — and the rule binds our wrapper whether
+or not the panicking line is ours.
+
+### Contained at our boundary
+
+`UtxoForest::from_bytes` wraps the call in `catch_unwind` and returns
+`UtreexoError::Snapshot`, the same error a clean parse failure gives, because to
+a caller they are the same event: these bytes are not a forest.
+
+**Two honest costs of doing it this way.**
+
+First, it is containment and not a repair. The real fix belongs in the fork
+([D25](#d25--the-rustreexo-d10-blocker-is-fixed-and-the-fix-is-pinned-to-a-fork))
+and upstream after that — three lines, turning the `panic!` into an
+`io::Error::new(InvalidData, ...)`, exactly as our own `ZcashNodeHash::read`
+already does for an unknown tag ([D19](#d19--zcashnodehash-serialisation-must-be-tagged)).
+
+Second, and worse: **`catch_unwind` blinds the fuzzer to every other panic in
+that deserialiser**, because they all become `Err` now. That is a real loss of
+signal, and it is the strongest argument for fixing upstream rather than
+leaving the wrapper in place indefinitely.
+
+### Consequence for the 72-hour run
+
+`libfuzzer-sys` installs a panic hook that aborts the process *before*
+unwinding, so the containment is invisible under the fuzzer and both
+forest-reaching targets still die within seconds. They are excluded from the
+72-hour run — including them would spend three days re-finding one known bug —
+and go back in when the pinned revision returns an error.
+
+The regression test is written against the public behaviour ("this returns an
+error"), not against the panic, so it keeps passing unchanged once the fork is
+fixed and the `catch_unwind` comes out. A test asserting a panic would have to
+be rewritten by whoever fixed it, which is how a seed gets quietly deleted.
+
+### Correction (2026-08-23): the containment above is incomplete
+
+Writing the fork fix turned up a **second** bug in the same function, and it is
+the more serious of the two — because the paragraphs above claim a containment
+that does not hold against it.
+
+`Node::read_one` recurses once per branch node, and nothing bounds the depth,
+so the *input* chooses how deep the recursion goes. A left spine of nested
+branch nodes overflows the stack: **~1.2 MB of input in a debug build, ~4 MB in
+release**, measured. A snapshot file is an ordinary place to find four
+megabytes.
+
+**A stack overflow aborts the process. It does not unwind.** So
+`catch_unwind` in `UtxoForest::from_bytes` does nothing for this input class,
+and the section above — written when the node-type `panic!` looked like the
+whole problem — was wrong to describe our boundary as contained. It was
+contained against the panic and open against the overflow. The distinction was
+not visible until the panic was fixed and the fuzzer's next crash was a SIGABRT
+with no unwind to catch.
+
+This is the same shape of error as [D29](#d29--a-length-guard-that-only-checked-one-direction): a guard that is real, tested,
+and narrower than the claim written next to it.
+
+### The fix, written and verified
+
+Two commits on `d33-deserialize-no-panic` in the fork clone, **not yet pushed**
+— that is the user's to do:
+
+1. The node-type tag returns `io::Error::new(InvalidData, ...)` instead of
+   panicking, matching what `node_hash/mod.rs:316` already does for an unknown
+   hash tag.
+2. The recursion is bounded at `MAX_FOREST_ROWS`. This is not an arbitrary
+   cap: a root is a perfect tree of at most that many rows, so its leaves sit
+   at most that many levels below it, and anything deeper is not a forest the
+   crate could have written. A spine exactly `MAX_FOREST_ROWS` deep still
+   round-trips; 64 is rejected.
+
+A third commit fixes an unrelated `unwrap()` on the *write* side —
+`serialize` `?`s its two length prefixes and then unwrapped the result of
+writing each root, so a full disk or closed pipe panicked out of a function
+returning `io::Result`.
+
+Verified: all five crash artifacts under `fuzz/artifacts/{forest,snapshot}_decode/`
+now return errors, and they return the *fork's* error
+("unexpected node type for MemForest node"), not the `catch_unwind` fallback —
+which is the evidence the repair is doing the work rather than the containment.
+The full workspace suite passes against the patched fork, `upstream_rustreexo.rs`
+included. Each fork-side regression test was confirmed to fail with only its own
+fix reverted.
+
+**The `catch_unwind` stays** until the pin moves to the pushed revision. It
+costs the fuzzer signal (above), but removing it before the pin moves would
+reopen the panic it was written for.
+
+---
+
+## D34 — The DoS scenario CLAUDE.md names is the mild one
+
+**Phase 6.** Measured against real tip state (`crates/zutreexo-testkit/src/bin/dos_cost.rs`),
+27,522,884 unspent outputs.
+
+CLAUDE.md Phase 6 asks for "cost to a bridge node of a peer requesting proofs
+for every UTXO". Measured, that scenario is **not** the one to worry about, and
+two others are.
+
+### The named scenario: 193 seconds
+
+| | p50 | p99 | mean | size |
+|---|---|---|---|---|
+| transparent inclusion proof | 0.008 ms | 0.011 ms | 0.007 ms | 809 B |
+| nullifier non-membership proof | 0.009 ms | 0.021 ms | 0.010 ms | 775 B |
+
+Proving **every** UTXO in the set is 193 s of CPU and 22.28 GB served. Three
+minutes. Nullifier proofs are flat in set size — `O(depth)`, not `O(log n)` —
+so 54.1M nullifiers cost no more each than 70,000 did.
+
+CPU is not the constraint. Rate limiting bounds it anyway: at the default 600
+requests per minute, walking the whole set takes an attacker **765 hours of
+requests the bridge was willing to answer**.
+
+### The first real one: slowloris, and it is total
+
+The bridge is single-threaded by construction —
+[D27](#d27--the-bridge-speaks-binary-over-http-not-grpc) — so serving is one
+queue. A client that connects and sends one byte of an HTTP header, then
+nothing, parked the only serving thread in `read()` **indefinitely**, for every
+other client, from one socket carrying no traffic and costing no CPU.
+
+Against a threaded server slowloris degrades throughput. Against this one it was
+complete denial from a single connection, and it cost the attacker nothing.
+
+Fixed: socket read/write timeouts, plus a **total request deadline**, because a
+per-read timeout alone is insufficient — a client can send one byte just inside
+every deadline forever. `crates/zutreexo-bridge/tests/dos.rs` proves both, and
+carries the control showing a complete request is still served, since a server
+that refuses everything would pass a timeout test too. Removing the timeout
+makes the test hang rather than fail, which was verified.
+
+### The second: amplification
+
+Request and response are wildly asymmetric.
+
+| request | bytes in | bytes out | ratio |
+|---|---|---|---|
+| non-membership proof | 35 | 775 | **22×** |
+| block proof bundle (mean at tip) | 6 | 18,889 | **3,148×** |
+| block proof bundle (largest seen) | 6 | 87,577 | **14,596×** |
+
+A six-byte request returning 87 KB is a reflector. Even *within* the rate limit,
+600 bundle requests a minute is 0.7 GB/h of egress driven by 0.22 MB/h of
+ingress.
+
+**A proof-size cap does not help**, which is worth stating because CLAUDE.md
+proposes one: every individual proof is small and legitimate; the asymmetry is
+inherent to the service. The defences that do apply are rate limiting by
+*bytes served* rather than by request count, and not exposing the bridge
+publicly — which remains the standing advice.
+
+### What is still not addressed
+
+No TLS, no authentication, no per-connection byte accounting. These limits make
+a bridge survivable on a trusted network; they do not make it safe on a hostile
+one. Bind it to loopback.
+
+---
+
+## D35 — Privacy: the headline capability cannot be delivered privately as designed
+
+**Phase 6.** CLAUDE.md requires this analysis be written "regardless of
+outcome". The outcome is negative, and it lands on Phase 5a's headline result.
+
+### Two users, and only one of them has a problem
+
+The design serves two very different callers, and they leak differently.
+
+**A compact validating node** requests `BlockProofBundle`s **by height**. Doing
+initial block download it wants every height; following the tip it wants the
+latest. The request pattern carries no information the node is not already
+broadcasting by being a node. **This use case is clean**, and it is what Phases
+4 and 5b measured.
+
+**A light wallet** requests non-membership proofs **by nullifier value**. This
+one is the problem, and it is the use case behind Phase 5a's headline.
+
+### What a nullifier query actually discloses
+
+A nullifier is derived from the note and the spending key's nullifier key. Until
+the note is spent, **nobody but the holder can compute it** — that unlinkability
+is the shielded design. So asking a bridge "is nullifier X spent?" hands over a
+value that was, up to that moment, a secret.
+
+Three consequences, worsening:
+
+1. **The value itself.** The bridge learns a nullifier exists and is unspent.
+2. **Network identity bound to a future on-chain event.** When X is later
+   spent it appears in a block. The bridge — which also reads the chain — can
+   tie that transaction to whoever asked about X, and to when.
+3. **Linkage across a wallet's notes, which is the severe one.** A wallet
+   asking about X₁…Xₙ reveals that those n notes share an owner. On-chain those
+   spends may fall in different transactions, at different times, and would
+   otherwise be unlinkable. **A single batched query undoes that.**
+
+Compared to the status quo this is a strict regression. A scanning wallet
+downloads public data and compares locally; the server learns which blocks were
+fetched and nothing about which notes matched.
+
+### Decoy batching does not work, and the reason is specific to nullifiers
+
+The obvious mitigation is k-anonymity: ask about the real nullifier alongside
+k−1 fabricated ones. Decoys are cheap to generate, since nullifiers are
+pseudorandom 32-byte values and a random one is indistinguishable on its face.
+Responses do not betray them either — an absent decoy returns the same
+non-membership proof a genuine unspent nullifier does.
+
+**It fails retrospectively.** The wallet queried S = {X} ∪ decoys, all reported
+unspent. Later the wallet spends the note, and X appears in a block. The bridge
+reads the chain, observes that exactly one member of S ever showed up, and knows
+it was the real one. The anonymity set collapses from k to 1 **at the moment the
+note is spent** — which is the moment it mattered.
+
+Decoys therefore protect only notes that are never spent, and the linkage in
+point 3 above is untouched: the subset of previously-queried values that later
+appear on-chain is precisely the wallet's own set.
+
+The wallet cannot escape by drawing decoys from real unspent nullifiers,
+because it cannot compute anyone else's. Drawing them from already-spent ones
+fails immediately, since those answer `ALREADY_SPENT`.
+
+Even granting that decoys worked, the price is steep. Against Phase 5a's
+measured figures, with a sparse proof at 631 bytes:
+
+| gap | notes | k=1 | k=10 | k=100 |
+|---|---|---|---|---|
+| 1,000 | 10 | 46.1× | 4.6× | **0.5×** |
+| 10,000 | 10 | 347× | 34.7× | 3.5× |
+| 400,000 | 10 | 6,844× | 684× | 68.4× |
+| 400,000 | 100 | 684× | 68.4× | 6.8× |
+
+and the crossover for a 10-note wallet moves from 58 blocks to 5,846 — from
+about an hour offline to about five days.
+
+### The other three options
+
+**Ask only about nullifiers you are about to publish.** Sound: the value goes
+public within seconds anyway. It also **eliminates Framing A entirely**, which
+is the watch-only spend-status query — the one Phase 5a measured at 317× to
+31,705×, and the one CLAUDE.md calls the headline. A wallet checking whether its
+note has *already* been spent is by definition not about to publish that
+nullifier.
+
+**Private information retrieval.** Genuinely solves it, and destroys the
+efficiency argument that motivates the design: single-server PIR costs the
+server work linear in the database per query. D34 measured a non-membership
+proof at 0.010 ms; a PIR query over 54.1M nullifiers is many orders above that.
+CLAUDE.md §7 already flags Tachyon's PIR work as possibly subsuming this
+project, and on this axis it does.
+
+**Run your own bridge.** No leak, no saving — the wallet holds the full IMT. Fine
+for an operator who wants compact *validation*, which is the clean use case
+above, and no answer at all for a light client.
+
+### A direction that might survive, offered as a sketch
+
+Random decoys fail because the wallet chooses them. **Ambiguity drawn from the
+value space does not**, because the candidate set is other people's real
+nullifiers, which do appear on-chain and so cannot be filtered out
+retrospectively.
+
+Concretely: reveal a b-bit prefix of the nullifier and receive enough of the
+tree to settle membership locally. The bridge learns X lies among roughly
+2⁻ᵇ·|set| real values — at b = 16 over 54.1M nullifiers, about 760 candidates —
+and that ambiguity persists after the spend, because the other candidates are
+genuine notes belonging to other people.
+
+**The obstacle is our own layout.** An indexed Merkle tree stores leaves in
+*insertion* order and maintains sortedness through the `next_index` linked list
+(§2.1), so a contiguous value range is not a contiguous subtree and cannot be
+served as one. A wallet would have to fetch scattered low-leaf candidates and
+their paths — roughly 760 × 631 B ≈ 480 KB, still about 90× better than a
+year-long scan, but nothing like 31,705×, and it needs an index the bridge does
+not currently maintain.
+
+This is a research direction, not a design. It is recorded because it is the
+only mitigation examined here that is not defeated on inspection.
+
+### Conclusion
+
+**Phase 5a's headline capability — cheap watch-only spend-status checking —
+cannot be delivered privately by bridge-served non-membership proofs.** Every
+mitigation either destroys the capability (publish-only), destroys the
+efficiency (PIR), destroys the point (run your own bridge), or does not work
+(decoys).
+
+This does not sink the project. The compact-node use case is unaffected and is
+where Phases 4 and 5b's results live. But `docs/benchmarks.md` Phase 5a should
+be read with this attached: **the 31,705× is a bandwidth measurement of a query
+a privacy-conscious Zcash wallet should not make**, and it sits alongside the
+trust caveat already recorded there. Two independent reasons the headline is
+weaker than its number.
+
+Phase 7 does not change this. Committing accumulator roots on-chain fixes the
+*trust* caveat — the wallet would no longer need a bridge's word for the root —
+and does nothing about the leak, because the wallet must still ask someone for
+a proof.
+
+---
+
+## D36 — Fuzz budget: four of five targets saturated in under two hours
+
+**Phase 6.** The 72-hour run launched 2026-08-22 finished 2026-08-25 05:44:01
+with **zero crashes, zero hangs, zero OOMs across all five targets** and
+**206,659,449,674 executions**. Phase 6's DoD ("fuzzers run 72 h clean") is met
+for the five included targets; `forest_decode` and `snapshot_decode` remain
+excluded on [D33](#d33--memforestdeserialize-is-not-total-on-malformed-input)
+and owe their own run once the fork fix is pushed.
+
+What follows is about how that budget was *spent*, which is where the run has
+something to teach.
+
+The run was configured the obvious way: five targets, one core each, the same
+`-max_total_time=259200` for all of them. That allocation turns out to be
+badly wrong, and the run's own logs say so.
+
+### What the 38 hours actually bought
+
+`cov` at `INITED` is what the *seed corpus* already reached. The difference
+between that and the current figure is what 38 hours of fuzzing added.
+
+| target | edges at INITED | final | gained | executions | last new edge | share of run after it |
+|---|---|---|---|---|---|---|
+| `bundle_decode` | 781 | 812 | **+31** | 4.7e9 | **71.5 h** | 0.6% |
+| `utxo_proof_decode` | 181 | 184 | +3 | 42.1e9 | `#101` | ~100% |
+| `compact_state_decode` | 301 | 301 | **0** | 35.4e9 | never | 100% |
+| `nonmembership_decode` | 323 | 323 | **0** | 5.0e9 | never | 100% |
+| `wire_request_decode` | 111 | 111 | **0** | 119.5e9 | never | 100% |
+
+**Five targets, 206 billion executions, 72 hours, 34 new edges** — and 31 of
+them belong to one target. Three targets never reached a single edge their seed
+corpus had not already reached; `nonmembership_decode` reports the identical
+`cov: 323` on every stat line it has ever printed. `utxo_proof_decode` found
+its three at execution **101** and nothing in the 42 billion since.
+
+### `bundle_decode` was not saturated — the clock cut it off
+
+Its full discovery trace, by execution count:
+
+| edge | at | ≈ elapsed |
+|---|---|---|
+| 809 | 566M | 8.7 h |
+| 810 | 1.29e9 | 19.7 h |
+| 811 | 4.32e9 | 66.3 h |
+| **812** | **4.66e9** | **71.5 h** |
+
+The last edge landed with about twenty-five minutes left on a 72-hour clock.
+So the budget was simultaneously three days too long for four targets and *too
+short* for the fifth.
+
+**This refutes an intermediate call recorded here.** Mid-run, `bundle_decode`
+had been quiet for 33 hours and I judged the 10×-past-last-discovery rule to be
+over-extrapolating, and advised planning ~2 days for it and spending the
+surplus on seeds. Two edges then arrived at 66.3 h and 71.5 h. Cutting at two
+days would have missed both.
+
+The error was reading a quiet stretch as exhaustion. Discovery here is
+**bursty, not smoothly decaying**: the gap from 810 to 811 was 3.0 billion
+executions, and the gap from 811 to 812 only 0.34 billion. On a target with
+this much surface — 3,451 instrumented edges against a 289-file corpus — a day
+of silence carries much less information than it feels like it does. The
+mechanical rule was right and the judgement call over it was wrong, which is
+the reason the rule is written down.
+
+**A `NEW` line does not mean a new edge**, and conflating the two is how a
+saturated target looks busy. libFuzzer emits `NEW` for a new *feature* — an
+edge-count bucket — so `compact_state_decode` (4 `NEW` lines) and
+`nonmembership_decode` (6) appear to be finding things hours in while their
+coverage has not moved once. An earlier draft of this table read the last `NEW`
+timestamp and reported saturation at "~7 min" and "~2.1 h" for those two; both
+are actually *never*. `scripts/fuzz_saturation.py` tracks the high-water mark of
+`cov` instead, which is why the numbers above come from the tool rather than
+from reading the logs by eye.
+
+### The correction this implies
+
+**More hours is the wrong lever for a saturated target.** A target stuck at the
+same edge count for 34 billion executions is not short of time; mutation cannot
+reach further from the seeds it has. The fix is a better seed corpus or a
+structured `Arbitrary`-based generator that constructs well-formed-ish inputs,
+so the fuzzer spends its budget past the length and magic checks instead of in
+front of them. This is the same lesson as
+[D24](#d24--a-checksum-in-front-of-a-parser-hides-every-check-behind-it),
+one level out: there, a checksum hid the parser from the fuzzer; here, the
+input distribution does.
+
+**So budget the next run per target, not per clock:**
+
+1. **Stop a target on saturation, not on the wall clock.** A workable rule:
+   end it once it has run 10× longer since its last new edge than it took to
+   find that edge. On the final numbers four of the five end within minutes and
+   `bundle_decode` wants **~30 days** — the rule's output grows each time a late
+   edge lands, which is the behaviour you want from a stopping rule and not a
+   literal schedule. `scripts/fuzz_72h.sh` now encodes 7 days for
+   `bundle_decode` and 24 h for the rest;
+   `scripts/fuzz_saturation.py` recomputes it after any run.
+2. **Spend the freed cores on the target still finding things**, with
+   `-fork=N` — *not* `-jobs=N -workers=N`. Measured, `-jobs` writes each
+   worker's output to `fuzz-<n>.log` in the current directory and leaves the
+   main log carrying one worker's numbers, so the run's own analysis silently
+   under-reports; fork mode keeps a single stream and merges the workers'
+   corpora. Two forks took `bundle_decode` from ~18k to ~40k exec/s.
+
+   Fork mode prints no `INITED`, no `Done ... runs` and no `stat::` block, and
+   its stat lines have a different shape, so it needed explicit parser support
+   — without it a parallel run's log yields an empty report that looks exactly
+   like a target that never ran. Both dialects are covered by self-checks that
+   run on every invocation.
+3. **Re-seed rather than re-run.** For any target that gains zero edges,
+   the next iteration's work item is corpus and harness, not schedule.
+4. **Estimating a future run:** the useful unit is *time to last discovery per
+   target*, and on this codebase it spans from execution 101 to 71.5 hours. A
+   single figure covering all targets is necessarily wrong in both directions
+   at once. Budget `bundle_decode`-class targets in **weeks** and treat the rest
+   as a seeding problem. Run `scripts/fuzz_saturation.py` against the previous
+   run's logs rather than guessing — it needs no arguments once a run has
+   finished, and mid-run with `--elapsed-hours H` it answers "is this worth
+   letting finish?". Note the answer it would have given at 38 h here, and that
+   the honest reading of it was still to let the run finish.
+
+### What this does not say
+
+It does not say the run was worthless. Its product is the *absence* of a crash
+across 73 billion executions, and a saturated target still contributes to that
+— it is a negative result about robustness, not about coverage. Phase 6's DoD
+is "fuzzers run 72 h clean," and that is being met.
+
+Nor do the raw coverage percentages mean the parsers are 15–23% tested. The
+instrumented edge count includes dependency code linked into the binary that no
+decode entry point can reach, so the denominator is inflated by an unknown
+amount. The load-bearing number here is the *marginal* one — edges gained
+during the run — which needs no denominator.
+
+`scripts/fuzz_72h.sh` now carries the per-target budgeting above, applied once
+the run ended — a script that is executing is not a file to edit, since bash
+reads it by byte offset. The same pass fixed a reporting bug in it:
+`ls | grep -c .` exits 1 on an empty directory, so the `|| echo 0` fallback
+appended a *second* line and every completion line in `driver.log` read
+`artifacts=0` followed by a stray `0`. The counts were right; the log was
+malformed. `wc -l` replaces it.
 
 ---
 

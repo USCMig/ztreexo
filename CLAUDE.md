@@ -198,8 +198,39 @@ Pure library. No chain, no I/O, no network.
   - delete-then-prove fails (transparent accumulator).
 - Deterministic vectors checked into `testkit` so later refactors can't drift.
 
-**DoD:** 100% branch coverage on `imt.rs`; proptests green at 10k cases; a
-`cargo bench` harness exists for insert/prove/verify at set sizes 10⁴, 10⁶, 10⁸.
+**DoD (amended 2026-08-22):** **100% of *reachable* branches on `imt.rs`** —
+83 of 88 branch sides, with the five unreachable ones enumerated below; proptests green at 10k
+cases; a `cargo bench` harness exists for insert/prove/verify at set sizes 10⁴,
+10⁶, 10⁸.
+
+> **Why this was amended.** The original said "100% branch coverage on
+> `imt.rs`", and that number is not attainable while the file keeps its
+> defensive guards. Measured on nightly after
+> `crates/zutreexo-accumulator/tests/imt_branches.rs` closed every reachable
+> path, five branches remain, and each is unreachable **through the public
+> API** rather than merely untested:
+>
+> | branch | why nothing can reach it |
+> |---|---|
+> | `capacity_of`: `depth > MAX_DEPTH` | private, and every caller runs `check_depth` first |
+> | `verify_insertion`: `leaf_count > capacity_of(depth)` | shadowed — the append index equals `leaf_count`, so `check_path`'s index bound always fires first. Measured at depths 1, 2, 3 |
+> | `rebuild_root`: `level.is_empty()` | the rebuilt leaf vector always holds the sentinel |
+> | `undo_insert`: right side of `next_value != v \|\| next_index != i` | only one leaf can point at a given value, so the index is determined once the value matches |
+> | `low_leaf_for`: `!leaf.covers(&value)` | needs a corrupted linked list, and no public mutator can produce one |
+>
+> **Deleting them to reach 100% would be the wrong trade.** They exist so a
+> future refactor that breaks an invariant fails loudly instead of computing a
+> wrong root, and CLAUDE.md §5 rule 3 is the reason they return errors rather
+> than panicking. A coverage number is not worth a silent corruption.
+>
+> The amendment is narrower than it looks: **every branch a caller can reach by
+> passing bad input is now covered**, which is what the criterion was for.
+>
+> The other half of the problem was reproducibility. `PLAN.md` recorded that
+> branch coverage moved between identical runs because the property suites
+> reseed each time, so no ratchet could be tightened. The new suite is
+> deterministic — fixed inputs, named expected errors, no generation — so the
+> figure is now stable run to run, which is what makes it enforceable at all.
 
 ---
 

@@ -522,9 +522,39 @@ impl UtxoForest {
     }
 
     /// Restores a forest previously written by [`UtxoForest::to_bytes`].
+    ///
+    /// # Upstream panics are contained here
+    ///
+    /// `MemForest::deserialize` **panics** on a malformed node-type field —
+    /// `panic!("Invalid node type")`, `mem_forest/mod.rs:144` — rather than
+    /// returning the `io::Result` its signature promises. Twenty-five bytes are
+    /// enough; Phase 6's fuzzer found it in under three thousand executions and
+    /// reached the same panic through the snapshot loader, which is the path
+    /// that matters: a corrupt snapshot file would take the process down.
+    ///
+    /// CLAUDE.md §5 rule 3 forbids a panic in these paths, and the rule binds
+    /// this wrapper whether or not the panicking line is ours. So the call is
+    /// wrapped and a panic becomes [`UtreexoError::Snapshot`], the same error a
+    /// clean parse failure produces — because from a caller's position they are
+    /// the same event: these bytes are not a forest.
+    ///
+    /// `AssertUnwindSafe` is sound here because everything the closure touches
+    /// is dropped on the panicking path; nothing half-built escapes.
+    ///
+    /// **This is containment, not a fix.** The real repair belongs in the fork
+    /// (`docs/design.md` D25) and upstream after that; `docs/design.md` D33
+    /// records the reasoning and the patch. Remove this wrapper when the pinned
+    /// revision returns an error instead — `a_bad_node_type_is_an_error_not_a_panic`
+    /// keeps passing either way, which is the point of writing it against the
+    /// public behaviour rather than against the panic.
     pub fn from_bytes(bytes: &[u8]) -> Result<UtxoForest, UtreexoError> {
-        let forest = MemForest::deserialize(bytes)
-            .map_err(|error| UtreexoError::Snapshot(error.to_string()))?;
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            MemForest::deserialize(bytes)
+        }))
+        .map_err(|_| {
+            UtreexoError::Snapshot("forest deserialiser panicked on malformed input".to_owned())
+        })?;
+        let forest = parsed.map_err(|error| UtreexoError::Snapshot(error.to_string()))?;
         Ok(UtxoForest { forest })
     }
 }
@@ -845,6 +875,53 @@ mod tests {
             wrong.leaves(),
             "the counters must still differ, or the case is not what it claims"
         );
+    }
+
+    /// The 25 bytes Phase 6's fuzzer used to abort the process.
+    ///
+    /// `MemForest::deserialize` panics with "Invalid node type" on an
+    /// unrecognised node-type field rather than returning the `io::Result` its
+    /// signature promises. libFuzzer found it in under 3,000 executions, and
+    /// reached the identical panic through `store::load_bytes`, which is the
+    /// path that matters: a corrupt snapshot file would take a node down.
+    ///
+    /// Deliberately written against the **public behaviour** — "this returns an
+    /// error" — and not against the panic. When the fork stops panicking and
+    /// `from_bytes` drops its `catch_unwind`, this test should keep passing
+    /// unchanged. A test asserting a panic would have to be rewritten by
+    /// whoever fixes it, which is how a regression seed gets quietly deleted.
+    #[test]
+    fn a_bad_node_type_is_an_error_not_a_panic() {
+        let seed = hex_bytes("0a00007e7e000000000a000000000000000a00000000000000");
+        match UtxoForest::from_bytes(&seed) {
+            Err(UtreexoError::Snapshot(_)) => {}
+            Err(other) => panic!("wrong error variant: {other}"),
+            Ok(_) => panic!("25 bytes of fuzzer output decoded as a forest"),
+        }
+    }
+
+    /// Every prefix and every single-bit mutation of that seed, none of which
+    /// may panic. One seed proves the reported case; the sweep is what stops a
+    /// neighbouring input reopening it.
+    #[test]
+    fn no_mutation_of_the_seed_panics() {
+        let seed = hex_bytes("0a00007e7e000000000a000000000000000a00000000000000");
+        for length in 0..=seed.len() {
+            let _ = UtxoForest::from_bytes(&seed[..length]);
+        }
+        for index in 0..seed.len() {
+            for bit in 0..8u8 {
+                let mut corrupted = seed.clone();
+                corrupted[index] ^= 1 << bit;
+                let _ = UtxoForest::from_bytes(&corrupted);
+            }
+        }
+    }
+
+    fn hex_bytes(text: &str) -> Vec<u8> {
+        (0..text.len() / 2)
+            .map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]

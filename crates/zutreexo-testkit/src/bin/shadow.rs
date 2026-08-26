@@ -64,26 +64,36 @@ use zebra_chain::serialization::ZcashDeserialize;
 use zutreexo_accumulator::imt::DEFAULT_DEPTH;
 use zutreexo_accumulator::{CanonicalSerialize, PoolId};
 use zutreexo_chain::{
-    apply_and_prove, apply_block, load, summarize_block, ApplyOptions, BlockProofBundle,
-    BlockSummary, ChainAccumulators,
+    apply_and_prove, load, summarize_block, ApplyOptions, BlockProofBundle, BlockSummary,
 };
 use zutreexo_csn::CompactState;
 use zutreexo_testkit::measure::{peak_rss_mib, rss_mib, Latencies};
-use zutreexo_testkit::shadow::{find_fork, AppliedBlock, Fork};
+use zutreexo_testkit::shadow::{unwind, Applied, ChainView};
 use zutreexo_testkit::source::{BlockSource, RpcSource};
 
-/// One block this run applied, and the compact state it produced.
+/// Adapts `RpcSource` to what `unwind` needs.
 ///
-/// The `hash` is what makes reorg detection possible: height alone does not
-/// identify a block, and a follower tracking only heights would stack a
-/// replacement block on top of the one it replaced.
-struct Applied {
-    height: u32,
-    hash: String,
-    /// The compact state *after* this block. A few hundred bytes, which is why
-    /// keeping hundreds of them is affordable and a full node's equivalent is
-    /// not.
-    csn: CompactState,
+/// The deserialisation lives here rather than in the library so a test can
+/// drive the reorg path with synthetic summaries instead of fabricating
+/// consensus-encoded blocks for two divergent chains.
+struct NodeView<'a>(&'a RpcSource);
+
+impl ChainView for NodeView<'_> {
+    fn block_hash(&self, height: u32) -> Result<String, String> {
+        self.0
+            .block_hash(height)
+            .map_err(|e| format!("hash query at {height}: {e}"))
+    }
+
+    fn summary_at(&self, height: u32) -> Result<BlockSummary, String> {
+        let raw = self
+            .0
+            .raw_block(height)
+            .map_err(|e| format!("refetch {height}: {e}"))?;
+        let block =
+            Block::zcash_deserialize(&raw[..]).map_err(|e| format!("reparse {height}: {e}"))?;
+        summarize_block(&block).map_err(|e| format!("reextract {height}: {e}"))
+    }
 }
 
 fn env_u32(key: &str, fallback: u32) -> u32 {
@@ -311,12 +321,13 @@ fn main() -> std::process::ExitCode {
                         if *recorded != current {
                             reorgs = reorgs.saturating_add(1);
                             match unwind(
-                                &source,
-                                &snapshot,
+                                &NodeView(&source),
+                                std::path::Path::new(&snapshot),
                                 depth,
                                 &mut bridge,
                                 &mut csn,
                                 &mut history,
+                                |line| println!("{line}"),
                             ) {
                                 Ok(depth) => {
                                     deepest_reorg = deepest_reorg.max(depth);
@@ -540,114 +551,4 @@ fn main() -> std::process::ExitCode {
     println!("peak rss (VmHWM)    {} MiB", peak_rss_mib());
 
     std::process::ExitCode::SUCCESS
-}
-
-/// Walks back to the deepest block whose hash the node still agrees with, and
-/// unwinds both sides to it. Returns how many blocks were undone.
-///
-/// # Both sides, and they undo very differently
-///
-/// Utreexo deletion is not invertible (`docs/design.md` D18), so the bridge
-/// cannot simply step backwards. It reloads the snapshot this run resumed from
-/// and replays the common prefix — heights at or below the fork are unchanged
-/// by definition, so refetching them from the node is safe.
-///
-/// The compact node takes an older state off a queue. No deltas, no positions,
-/// no forest, no replay. That asymmetry is the measurement.
-fn unwind(
-    source: &RpcSource,
-    snapshot: &str,
-    depth: u8,
-    bridge: &mut ChainAccumulators,
-    csn: &mut CompactState,
-    history: &mut VecDeque<Applied>,
-) -> Result<u32, String> {
-    // Fork detection is `zutreexo_testkit::shadow::find_fork`, which is a pure
-    // walk over the history and is tested in `tests/shadow_fork.rs`. Keeping a
-    // second copy of it here would leave the tested one decorative.
-    let mut marks: VecDeque<AppliedBlock> = history
-        .iter()
-        .map(|a| AppliedBlock {
-            height: a.height,
-            hash: a.hash.clone(),
-        })
-        .collect();
-    let fork = find_fork(&mut marks, |height| {
-        source
-            .block_hash(height)
-            .map_err(|e| format!("hash query at {height}: {e}"))
-    })?;
-
-    let (target, undone) = match fork {
-        Fork::None => return Ok(0),
-        Fork::BeyondHistory { undone } => {
-            return Err(format!(
-                "unwound {undone} block(s) and ran out of history; the fork predates this run"
-            ))
-        }
-        Fork::UnwindTo { target, undone } => (target, undone),
-    };
-    // Bring the real history (which carries the compact states) into line with
-    // what the search decided.
-    while history.back().is_some_and(|a| a.height > target) {
-        history.pop_back();
-    }
-
-    // ---- the bridge: reload, then replay the common prefix ----
-    let began = Instant::now();
-    let mut restored =
-        load(std::path::Path::new(snapshot)).map_err(|e| format!("reload {snapshot}: {e}"))?;
-    let base = restored.tip().map_or(0, |tip| tip.saturating_add(1));
-    if base > target.saturating_add(1) {
-        return Err(format!(
-            "snapshot is at {:?}, past the fork point {target}",
-            restored.tip()
-        ));
-    }
-
-    for height in base..=target {
-        let raw = source
-            .raw_block(height)
-            .map_err(|e| format!("refetch {height}: {e}"))?;
-        let block =
-            Block::zcash_deserialize(&raw[..]).map_err(|e| format!("reparse {height}: {e}"))?;
-        let summary = summarize_block(&block).map_err(|e| format!("reextract {height}: {e}"))?;
-        apply_block(&mut restored, &summary, ApplyOptions::default())
-            .map_err(|e| format!("reapply {height}: {e}"))?;
-    }
-    if restored.depth() != depth {
-        return Err(format!(
-            "reloaded snapshot depth {} does not match {depth}",
-            restored.depth()
-        ));
-    }
-    *bridge = restored;
-    println!(
-        "  bridge rebuilt to {target} in {:.1}s ({} blocks replayed)",
-        began.elapsed().as_secs_f64(),
-        target.saturating_sub(base).saturating_add(1),
-    );
-
-    // ---- the compact node: one clone off the queue ----
-    let began_csn = Instant::now();
-    match history.back() {
-        Some(applied) => *csn = applied.csn.clone(),
-        None => return Err("no compact state to restore".to_owned()),
-    }
-    println!(
-        "  compact node rewound in {} us",
-        began_csn.elapsed().as_micros()
-    );
-
-    // The invariant CLAUDE.md Phase 2 refuses to soften: byte-identical, not
-    // equivalent. If the two sides disagree after unwinding, the rollback is
-    // wrong and carrying on would measure a protocol that does not work.
-    if csn.utxo_roots() != bridge.utxo_roots() || csn.nullifier_roots() != bridge.nullifier_roots()
-    {
-        return Err(format!(
-            "after unwinding to {target} the two sides disagree - rollback is not byte-identical"
-        ));
-    }
-
-    Ok(undone)
 }

@@ -662,6 +662,19 @@ than about a day is better off with proofs even holding 100 notes, and a
 year-long gap favours them by two to four orders of magnitude. This is the
 result the project was built to find.
 
+> **Read this table with `docs/design.md` D35 attached (added 2026-08-22).**
+> Phase 6's privacy review concludes that **this exact query cannot be made
+> privately.** Asking a bridge about a specific nullifier hands over a value
+> only the note's owner could compute, and batching several links those notes
+> to one wallet. Decoys do not fix it: when the note is later spent the real
+> nullifier appears on-chain and the anonymity set collapses to one.
+>
+> So the numbers above are a *bandwidth* measurement of a query a
+> privacy-conscious Zcash wallet should not make. Together with the trust
+> caveat below, that is two independent reasons the headline is weaker than
+> 31,705× suggests. The compact-node results in Phases 4 and 5b are unaffected;
+> they request by height and leak nothing.
+
 **Framing B — the wallet is doing a full sync.** It also wants notes *received*
 during the gap, which needs trial decryption, which needs the compact block for
 every block in the gap regardless. The nullifiers are already inside that
@@ -685,6 +698,62 @@ barely touches the other. Framing A is a real capability that does not exist
 today. Framing B — "how long does my wallet take to sync" — is essentially
 unaffected, and any presentation of these numbers that quotes the 31,705×
 without saying so is choosing the flattering question.
+
+### Re-measured across three eras, 2026-08-22
+
+[D32](design.md) concluded that a figure measured over one slice of chain
+history is not a property of the design, after Phase 4b's 73.0%
+transparent-bandwidth share turned out to describe 2011 and inverted when
+measured anywhere else. Its closing note flagged this result as needing the
+same check, since it was taken over the most recent 400,001 blocks only.
+
+Checked. `gap_cost` now takes `ZUTREEXO_GAP_END`, so any era can be sampled.
+**All figures below use the sparse 637-byte proof** — see the correction note.
+
+| 400,000-block window | nullifiers/block | share of a compact sync | 1 note | 10 notes | 100 notes |
+|---|---|---|---|---|---|
+| **1,000,000–1,400,000** — Sapling era, pre-NU5 | 0.7 | 7.0% | 13,201× | 1,320× | 132× |
+| **1,350,000–1,750,000** — sandblasting | 5.3 | **3.1%** | **107,371×** | 10,737× | 1,074× |
+| **3,057,000–3,457,000** — tip | 3.4 | 14.8% | 69,040× | 6,904× | 690× |
+
+Crossovers, same basis:
+
+| wallet | pre-NU5 | sandblasting | tip |
+|---|---|---|---|
+| 1 note | 30 blocks | 4 blocks | 6 blocks |
+| 10 notes | 303 blocks | 37 blocks | 58 blocks |
+| 100 notes | 3,030 blocks (~63 h) | 373 blocks (~7.8 h) | 579 blocks (~12 h) |
+
+**The direction holds in every era; the magnitude spans a factor of eight.**
+Proofs win in all three, and a wallet offline more than about a day is better
+off with them everywhere. The spread tracks shielded activity almost exactly —
+scanning cost is linear in nullifiers revealed, a proof costs the same either
+way, so 0.7 per block versus 5.3 is most of the difference.
+
+Unlike D32's case this is **not** an inversion. The claim CLAUDE.md set out to
+test survives being measured somewhere else, which is precisely what the 73.0%
+did not.
+
+**Framing A and Framing B move in opposite directions**, which is the finding
+worth keeping from the third row. The sandblasting era is the *best* case for
+proofs against scanning (107,371×) and simultaneously the *worst* case for
+dropping nullifiers from a full sync (3.1%, against 14.8% at tip) — because
+sandblasted blocks are enormous, so the nullifiers inside them are a small
+share of bytes a syncing wallet must fetch regardless. An era that flatters one
+framing penalises the other.
+
+> **Correction, same day.** The first version of this section compared
+> pre-NU5's 13,201× against Phase 5a's 31,705× and concluded the advantage was
+> "about 2.4× smaller". **Those two numbers are on different bases.** Phase 5a
+> predates the sparse encoding and used the dense 1,362-byte proof; `gap_cost`
+> now reports the 637-byte sparse one. On a single basis the tip figure is
+> 69,040× and the real spread is 5.2×, not 2.4×.
+>
+> Caught by re-measuring tip alongside the other two and getting a crossover of
+> 6 blocks where Phase 5a's table said 13 — a ratio of 2.14, which is exactly
+> 1362/637. Comparing a new measurement against an old one without checking
+> they were taken the same way is the same error D32 is about, one level down:
+> not the wrong era, the wrong units.
 
 ### The trust caveat, which is not a footnote
 
