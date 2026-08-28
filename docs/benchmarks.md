@@ -938,9 +938,30 @@ a byte census; these are the measurements.
 | saved | **53.2%** |
 
 Projected at 631; the extra six bytes are the pool, depth and height the
-response now carries explicitly. This halves every crossover in the Phase 5a
-table: a 100-note wallet breaks even against scanning at roughly 590 blocks
-instead of 1,262.
+response now carries explicitly.
+
+> **Correction, 2026-08-28 — this table describes a tree 768× too small.**
+>
+> The 637 bytes were measured against a **65,536-leaf** tree. The tool's comment
+> justified that as "putting the occupied levels well below the depth, which is
+> the regime the whole chain is in", and **that reasoning is wrong**: the sparse
+> encoding omits siblings equal to the empty-subtree hash, so the count of
+> *non-empty* siblings is `log2(occupied)` and has nothing to do with the gap
+> between occupancy and depth. The proof grows a flat 32 bytes per doubling:
+>
+> | occupied leaves | sparse proof |
+> |---|---|
+> | 65,536 (2^16) | 637 B |
+> | 1,000,000 | 733 B |
+> | 8,000,000 | 829 B |
+> | **50,392,547 — Orchard** | **925 B** |
+>
+> So 637 B is right for **Ironwood** (70,380 nullifiers, genuinely a 2^16-scale
+> tree) and wrong for **Orchard**, which is the pool most notes are in. The
+> 53.2% saving against dense is unaffected — both forms grow together — but every
+> ratio computed from 637 B was overstated by 925/637 = **1.452×**. Corrected in
+> the Phase 5a tables below. `gap_cost` now takes the leaf count as a parameter
+> rather than hardcoding either figure. See `docs/design.md` D37.
 
 ### The compact-node bundle — heights 0–150,000
 

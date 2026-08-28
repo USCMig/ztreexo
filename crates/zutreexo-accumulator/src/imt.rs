@@ -1164,6 +1164,50 @@ impl IndexedMerkleTree {
         Ok((leaf, *index))
     }
 
+    /// Values strictly below `bound`, ascending, with their leaf indices.
+    ///
+    /// A range query over `index_by_value`, which the tree already maintains
+    /// for `low_leaf`. `cohort.rs` needs the *predecessor* of a range, which is
+    /// the last item of this iterator.
+    pub(crate) fn values_below(
+        &self,
+        bound: Value,
+    ) -> impl DoubleEndedIterator<Item = (Value, u64)> + '_ {
+        self.index_by_value
+            .range(..bound)
+            .map(|(value, index)| (*value, *index))
+    }
+
+    /// Values inside `range`, ascending, with their leaf indices.
+    ///
+    /// The whole reason a prefix cohort is cheap to *find* even though it is
+    /// scattered in the tree: sortedness already exists in this index, it is
+    /// only the tree layout that does not have it.
+    pub(crate) fn values_in(
+        &self,
+        range: crate::cohort::PrefixRange,
+    ) -> impl DoubleEndedIterator<Item = (Value, u64)> + '_ {
+        let lo = range.lo();
+        // `BTreeMap::range` cannot express an open-ended upper bound and an
+        // exclusive one through the same type, so branch rather than construct
+        // a sentinel above `Value::MAX` — there isn't one.
+        let iter: Box<dyn DoubleEndedIterator<Item = (&Value, &u64)>> = match range.hi() {
+            Some(hi) => Box::new(self.index_by_value.range(lo..hi)),
+            None => Box::new(self.index_by_value.range(lo..)),
+        };
+        iter.map(|(value, index)| (*value, *index))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    /// The digest at `(level, index)`, or the empty-subtree digest.
+    ///
+    /// The `node` below with cohort-crate visibility; the private one stays for
+    /// this module's own use.
+    pub(crate) fn node_at(&self, level: u8, index: u64) -> Hash {
+        self.node(level, index)
+    }
+
     /// Sibling hashes on the path from `index` to the root, leaf level first.
     fn siblings(&self, index: u64) -> Vec<Hash> {
         let mut siblings = Vec::with_capacity(usize::from(self.depth));

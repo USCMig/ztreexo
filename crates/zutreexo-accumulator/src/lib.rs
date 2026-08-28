@@ -30,6 +30,7 @@
 //! | Transparent | [`utreexo::UtxoForest`] | [`utreexo::UtxoRoots`] |
 //! | Nullifiers | [`imt::IndexedMerkleTree`] | [`imt::ImtState`] |
 
+pub mod cohort;
 pub mod hash;
 pub mod imt;
 pub mod pool;
