@@ -1164,6 +1164,16 @@ impl IndexedMerkleTree {
         Ok((leaf, *index))
     }
 
+    /// Every value in the set, ascending, sentinel first.
+    ///
+    /// The bulk source for `sorted.rs`'s epoch snapshot. Reading through the
+    /// IMT's own value index rather than re-deriving order means the two
+    /// structures cannot disagree about *membership* -- only about how they
+    /// prove it, which is what the differential test is for.
+    pub fn sorted_values(&self) -> impl Iterator<Item = Value> + '_ {
+        self.index_by_value.keys().copied()
+    }
+
     /// Values strictly below `bound`, ascending, with their leaf indices.
     ///
     /// A range query over `index_by_value`, which the tree already maintains

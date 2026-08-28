@@ -990,6 +990,35 @@ per-node level and index fields cost more than the sparse path's bitmap, so the
 "dedup" column goes negative. The cohort is a tool for large anonymity sets and
 should not be used where the set is one.
 
+### The sorted snapshot, 2026-08-28
+
+`docs/design.md` D38. Same tree, same questions, leaves stored in **value**
+order in a derived epoch snapshot rather than insertion order in the IMT.
+
+| prefix | members | siblings | **sorted** | IMT cohort | saving | B/member |
+|---|---|---|---|---|---|---|
+| 8 bits | 196,689 | 24.9 | 6.00 MB | 59.48 MB | 9.9× | 32 B |
+| **12 bits** | **12,288** | **25.2** | **384.9 KB** | 5.35 MB | **14.2×** | **32 B** |
+| 16 bits | 777 | 26.6 | 25.2 KB | 453.6 KB | 18.0× | 33 B |
+| 20 bits | 51 | 26.4 | 2.6 KB | 36.4 KB | 14.2× | 51 B |
+| 24 bits | 4.5 | 26.0 | 1.1 KB | 3.1 KB | 2.8× | 250 B |
+
+**12 bits is the chosen operating point: a 12,288-member anonymity set for
+384.9 KB**, less than a 768-member cohort cost under the IMT layout.
+
+The `siblings` column carries the result. It stays at ~25 whatever the cohort
+holds, because a value range is a contiguous run in a sorted tree and its proof
+is the fringe of the covering subtrees — at most two per level. Payload is
+`O(k)` at 32 bytes a member; proof is `O(log n)` and flat.
+
+Snapshot build: **16.8 s** for 50.4M values into a depth-26 tree, 24.7 GB peak
+for the whole measurement including the IMT alongside it. That is an epoch
+rebuild against an epoch measured in hours.
+
+Above 20 bits the sorted form loses its advantage and at 24 bits it is barely
+better than a plain proof — at `k ≈ 1` the fixed header and fringe dominate.
+Both cohort forms are tools for large anonymity sets.
+
 ### Per-pool anonymity is the binding constraint
 
 Prefix width has to be chosen per pool, and the pools span three orders of

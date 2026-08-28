@@ -55,6 +55,66 @@ const fn imt_personal(pool: PoolId, role: [u8; 4]) -> [u8; 16] {
     ]
 }
 
+/// Builds a sorted-cohort-tree separator as `"ZSortNul" ‖ pool ‖ role`.
+///
+/// A **distinct family** from `imt_personal`, and that is the point. The sorted
+/// tree (`sorted.rs`) holds the same nullifiers as the IMT for the same pool,
+/// so without separate separators a leaf digest from one could be presented as
+/// a node digest from the other. CLAUDE.md §5 rule 4 exists for exactly this:
+/// two structures over one set is where a cross-structure collision would be
+/// worth mounting.
+const fn sorted_personal(pool: PoolId, role: [u8; 4]) -> [u8; 16] {
+    let [p0, p1, p2, p3] = pool.tag();
+    let [r0, r1, r2, r3] = role;
+    [
+        b'Z', b'S', b'o', b'r', b't', b'N', b'u', b'l', p0, p1, p2, p3, r0, r1, r2, r3,
+    ]
+}
+
+/// Sorted-cohort-tree leaf separator for `pool`.
+pub const fn sorted_leaf_personal(pool: PoolId) -> [u8; 16] {
+    sorted_personal(pool, *b"Leaf")
+}
+
+/// Sorted-cohort-tree internal-node separator for `pool`.
+pub const fn sorted_node_personal(pool: PoolId) -> [u8; 16] {
+    sorted_personal(pool, *b"Node")
+}
+
+/// Sorted-cohort-tree padding-leaf separator for `pool`.
+pub const fn sorted_pad_personal(pool: PoolId) -> [u8; 16] {
+    sorted_personal(pool, *b"Padd")
+}
+
+/// Digest of one nullifier in the sorted cohort tree.
+///
+/// Just the value: sortedness is carried by *position*, so the linked-list
+/// fields the IMT leaf commits to (`next_value`, `next_index`) have no
+/// counterpart here. That is the whole reason a sorted leaf is 32 bytes on the
+/// wire where an IMT leaf is 72.
+pub fn sorted_leaf(pool: PoolId, value: &[u8; 32]) -> Hash {
+    let mut state = params(&sorted_leaf_personal(pool));
+    state.update(value);
+    finalize(state)
+}
+
+/// Internal node of the sorted cohort tree.
+pub fn sorted_node(pool: PoolId, left: &Hash, right: &Hash) -> Hash {
+    let mut state = params(&sorted_node_personal(pool));
+    state.update(left);
+    state.update(right);
+    finalize(state)
+}
+
+/// The digest padding an unoccupied position in the sorted cohort tree.
+///
+/// The tree is built to the next power of two, so the tail is padding. Its own
+/// separator, for the reason [`imt_empty_leaf`] gives: no real nullifier can
+/// collide with a pad.
+pub fn sorted_pad_leaf(pool: PoolId) -> Hash {
+    finalize(params(&sorted_pad_personal(pool)))
+}
+
 /// Nullifier-IMT leaf-hash separator for `pool`.
 pub const fn imt_leaf_personal(pool: PoolId) -> [u8; 16] {
     imt_personal(pool, *b"Leaf")

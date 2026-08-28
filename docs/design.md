@@ -1279,6 +1279,115 @@ a proof.
 
 ---
 
+## D38 — 12,288-member anonymity for 384.9 KB, from a sorted snapshot the IMT never sees
+
+**Phase 6b, step 2.** Measured at Orchard's real 50,392,547 nullifiers
+(`crates/zutreexo-testkit/src/bin/cohort_cost.rs`). **Target chosen: k = 12,298**
+— [D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+priced that at **5.35 MB** per query, which was judged too much.
+
+| prefix | members | siblings | **sorted** | IMT cohort | saving | B/member |
+|---|---|---|---|---|---|---|
+| 8 bits | 196,689 | 24.9 | 6.00 MB | 59.48 MB | 9.9× | 32 B |
+| **12 bits** | **12,288** | **25.2** | **384.9 KB** | 5.35 MB | **14.2×** | **32 B** |
+| 16 bits | 777 | 26.6 | 25.2 KB | 453.6 KB | 18.0× | 33 B |
+| 20 bits | 51 | 26.4 | 2.6 KB | 36.4 KB | 14.2× | 51 B |
+| 24 bits | 4.5 | 26.0 | 1.1 KB | 3.1 KB | 2.8× | 250 B |
+
+**The target costs 384.9 KB** — less than a 768-member cohort cost before. The
+projection going in was ~395 KB; measured 384.9 KB, within 3%.
+
+The `siblings` column is the whole argument. It sits at ~25 whatever the cohort
+size, because a value range in a sorted tree is one **contiguous run** and its
+proof is the fringe of the covering subtrees: at most two per level, `O(log n)`.
+Cost per member collapses to the value itself, 32 bytes, against ~585 B in the
+IMT layout after deduplication.
+
+### Why this is not "reorder the IMT"
+
+Insertion order is not an accident. Appending to an indexed Merkle tree is
+`O(1)` and touches one path; inserting into the middle of a value-ordered tree
+of 50.4M leaves shifts about 25M of them, each a path update. That trade is what
+IMTs exist to make, and taking it back per block would be ruinous. An earlier
+note here described step 2 as "the value-ordered layout" without saying so,
+which understated the problem.
+
+What makes a sorted tree affordable is that **nullifier sets are append-only**.
+Nothing is ever removed, so a sorted snapshot stays correct for everything it
+contains, permanently — it can only become *incomplete*, never wrong. So it is
+rebuilt in bulk once an epoch. Measured: **16.8 s** to sort and hash 50.4M
+values into a depth-26 tree, against an epoch measured in hours.
+
+**The consequence for the frozen format is that there isn't one.** The IMT is
+untouched, its on-disk layout is untouched, no version bump, no migration. The
+sorted tree is derived, additive, bridge-side state, and consensus-neutral like
+everything before Phase 7. An earlier note said step 2 "touches a Phase 3-frozen
+structure"; under this design it does not, and the risk is much lower than that
+implied.
+
+### The gap between epochs is public data
+
+A snapshot at height H cannot know about nullifiers revealed after H. Those are
+**published on-chain**, so a wallet following the chain already holds them and
+needs no accumulator proof for them — the private query covers the 50.4M-member
+history, and the recent tail is public either way. This is tested:
+`sorted_differential.rs` asserts that a value revealed after the snapshot reads
+as unspent against it while the live IMT knows better, which is correct for that
+height and is exactly why the delta must be consulted.
+
+### The omission attack disappears
+
+[D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+records that a bridge can drop an in-range leaf from an IMT cohort, recompute
+the deduplication, and produce a valid Merkle proof of a smaller set —
+detectable only by consulting the linked list in `resolve`.
+
+Here it is **structural**. Members occupy consecutive positions and the proof
+commits to those positions, so a hole cannot be papered over. Completeness is
+checked directly: the run must begin below `range.lo` and continue to at or
+above `range.hi`, or to the last occupied leaf.
+
+That second half needed a fix the tests caught. The prover originally ended the
+run at the last in-range value, and a verifier shown a run ending at some
+`v < hi` cannot tell whether `v` is genuinely the largest in the range or
+whether the bridge stopped early. The run now includes the first value **at or
+above** `hi` as an upper witness — 32 bytes, and it turns completeness from an
+argument into a check.
+
+### Correctness
+
+`sorted_differential.rs` settles every probe three ways — the IMT directly, an
+IMT cohort, and a sorted cohort **through the wire** — and requires all three to
+agree. Two structures over one set is exactly where a silent disagreement lives:
+both self-consistent, both verifying, one wrong. The test also asserts it saw
+both verdicts, since a differential run that only ever saw "unspent" has proven
+nothing about "spent". Confirmed to fail on an injected off-by-one in the
+bracket.
+
+Domain separation is a distinct family, `ZSortNul‖pool‖role`, not a new role
+under `ZNullIMT`. The two trees hold the same values for the same pool, so
+sharing a separator would let a leaf digest from one be presented as a node
+digest from the other — CLAUDE.md §5 rule 4 for precisely this case.
+
+The decoder got its bit-flip and truncation sweep at the time it was written.
+It has the largest allocation lever of any decoder in the project: at the target
+width a legitimate cohort is 12,288 values, and a declared `u32::MAX` asks for
+**137 GB**. Confirmed by removing the guard — `memory allocation of
+137438953440 bytes failed`, SIGABRT.
+
+### What is decided and what is not
+
+**Decided:** the target is affordable. 12,288-member anonymity costs 384.9 KB,
+14.2× better than the IMT cohort, with no change to any frozen format.
+
+**Not decided:** how the bridge serves and retains snapshots (epoch length,
+how many to keep, what a wallet does across an epoch boundary), and the per-pool
+split — [D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+shows Ironwood's 70,380 nullifiers give a 1.07-member cohort at 16 bits, and its
+whole set is 2.25 MB, so small pools likely want whole-set download instead.
+
+---
+
 ## D37 — A private spend-status query costs 449.7 KB, and the published proof size was measured on the wrong tree
 
 **Phase 6b.** Measured against a depth-40 IMT holding Orchard's real nullifier

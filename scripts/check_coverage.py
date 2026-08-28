@@ -101,10 +101,34 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 97.2,
         "min_branches": 44,  # measured 46/56
     },
+    # The sorted cohort tree (D38). Gated on its own for the same reason as
+    # `cohort.rs`: it decodes bridge-supplied bytes, and it is a *second*
+    # structure over the same nullifier set, which is where a silent
+    # disagreement would live.
+    #
+    # 35 of 40 branches. The uncovered sides are `depth_for`'s overflow guard --
+    # unreachable without a Vec of more than 2^32 values -- and the pad
+    # fallbacks in the fold, which fire only for a tree shallower than any this
+    # builds. Kept for the reason CLAUDE.md's amended Phase 1 DoD gives: a guard
+    # that fails loudly beats a number.
+    "crates/zutreexo-accumulator/src/sorted.rs": {
+        "regions": 98.0,
+        "lines": 97.8,
+        "min_branches": 33,  # measured 35/40
+    },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average.
+    #
+    # Lowered 98.7 -> 98.6 on 2026-08-28, with the reason enumerated rather
+    # than the number simply moved. The sorted-cohort codec (D38) added ~200
+    # regions, one of which is provably dead: `reader.hash()?` inside the value
+    # loop. The count guard establishes `remaining >= 32 * value_count` before
+    # the loop, each iteration consumes exactly 32, so the read cannot fail --
+    # yet dropping the `?` would mean an unchecked read, which is worse than an
+    # uncovered one. Same trade CLAUDE.md's amended Phase 1 DoD makes for
+    # `imt.rs`: a guard that cannot fire beats a number.
     "crates/zutreexo-accumulator/src/proof.rs": {
-        "regions": 98.7,
+        "regions": 98.6,
         "lines": 99.6,
         "min_branches": 26,  # measured 29/32
     },

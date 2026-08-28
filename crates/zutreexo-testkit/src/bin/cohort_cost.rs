@@ -41,6 +41,7 @@ use zutreexo_accumulator::cohort::{verify_cohort, PrefixRange};
 use zutreexo_accumulator::imt::{IndexedMerkleTree, Value};
 use zutreexo_accumulator::pool::PoolId;
 use zutreexo_accumulator::proof::{CanonicalSerialize, NonMembershipResponse};
+use zutreexo_accumulator::sorted::{self, SortedTree};
 
 /// Production depth (`docs/design.md` D3).
 const DEPTH: u8 = 40;
@@ -49,7 +50,10 @@ const HEIGHT: u32 = 3_455_225;
 
 /// The prefix widths worth reporting. Below 8 the cohort is a large fraction of
 /// the pool; above 24 it is a single leaf and the query names the value.
+/// 12 is the chosen operating point: at Orchard scale it yields a
+/// ~12,298-member anonymity set (`docs/design.md` D37, D38).
 const WIDTHS: &[u8] = &[8, 12, 16, 20, 24];
+const TARGET_BITS: u8 = 12;
 
 /// xorshift64*, so the corpus is reproducible with no dependency and no
 /// system time — CLAUDE.md §5 rule 5.
@@ -244,6 +248,106 @@ fn main() {
             vs_base
         );
     }
+
+    // ---- the sorted snapshot, same tree, same questions ----
+    let started = Instant::now();
+    let snapshot = match SortedTree::from_imt(&tree, HEIGHT) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("could not build the sorted snapshot: {error}");
+            std::process::exit(1);
+        }
+    };
+    println!(
+        "\nsorted snapshot: depth {}, {} leaves, built in {:.1}s",
+        snapshot.depth(),
+        snapshot.leaf_count(),
+        started.elapsed().as_secs_f64()
+    );
+    println!("an epoch rebuild, against an epoch measured in hours\n");
+
+    println!(
+        "{:>5}  {:>10}  {:>9}  {:>11}  {:>11}  {:>9}  {:>8}",
+        "bits", "members", "siblings", "sorted", "imt cohort", "saving", "B/member"
+    );
+    println!("{}", "-".repeat(78));
+
+    for bits in WIDTHS {
+        let mut probe = Rng(seed ^ (u64::from(*bits) << 32) ^ 0x2468);
+        let mut members = Vec::new();
+        let mut siblings = Vec::new();
+        let mut encoded = Vec::new();
+        let mut imt_encoded = Vec::new();
+        let mut verified = 0usize;
+
+        for _ in 0..samples {
+            let target = probe.next_value();
+            let Ok(range) = PrefixRange::covering(target, *bits) else {
+                continue;
+            };
+            let Ok(cohort) = snapshot.prove_prefix_cohort(range) else {
+                continue;
+            };
+            if verified < 4 {
+                // Fold it and settle the probe. Measuring the size of a proof
+                // that does not work would be worse than not measuring.
+                match sorted::verify_cohort(&snapshot.root(), &cohort) {
+                    Ok(values) => match sorted::resolve(&values, &range, target) {
+                        Ok(_) => verified += 1,
+                        Err(error) => {
+                            eprintln!("a sorted cohort could not settle its own probe: {error}");
+                            std::process::exit(1);
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!("a sorted cohort at bits={bits} did not fold: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            members.push(cohort.member_count() as u64);
+            siblings.push(cohort.siblings.len() as u64);
+            encoded.push(cohort.to_bytes().len() as u64);
+            if let Ok(imt_cohort) = tree.prove_prefix_cohort(range) {
+                imt_encoded.push(imt_cohort.at_height(HEIGHT).to_bytes().len() as u64);
+            }
+        }
+
+        let m = summarize(&members);
+        let sib = summarize(&siblings);
+        let size = summarize(&encoded);
+        let imt_size = summarize(&imt_encoded);
+        let saving = if size.mean > 0.0 {
+            imt_size.mean / size.mean
+        } else {
+            0.0
+        };
+        let per_member = if m.mean > 0.0 {
+            size.mean / m.mean
+        } else {
+            0.0
+        };
+        let mark = if *bits == TARGET_BITS {
+            "  <-- target"
+        } else {
+            ""
+        };
+
+        println!(
+            "{:>5}  {:>10.1}  {:>9.1}  {:>11}  {:>11}  {:>8.1}x  {:>6.0} B{}",
+            bits,
+            m.mean,
+            sib.mean,
+            human_bytes(size.mean),
+            human_bytes(imt_size.mean),
+            saving,
+            per_member,
+            mark
+        );
+    }
+
+    println!("\nsiblings is the entire proof: at most two per level, flat in cohort size.");
+    println!("B/member trends to 32 — the value itself — as the cohort grows.");
 
     println!(
         "\ncohort k includes the predecessor leaf, which is a witness rather than a candidate:"
