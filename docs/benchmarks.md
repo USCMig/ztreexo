@@ -699,6 +699,13 @@ today. Framing B — "how long does my wallet take to sync" — is essentially
 unaffected, and any presentation of these numbers that quotes the 31,705×
 without saying so is choosing the flattering question.
 
+> **Not affected by the 2026-08-28 proof-size correction.** That correction is
+> about the *sparse* encoding, whose size depends on how many siblings are
+> non-empty and therefore on how many leaves the tree holds. The table above
+> predates sparse and uses the **dense** 1,362-byte proof, which carries all 40
+> siblings whatever the tree holds — size-independent, and still measured at
+> 1,362 bytes against the 50.4M-leaf tree. The figures here stand as recorded.
+
 ### Re-measured across three eras, 2026-08-22
 
 [D32](design.md) concluded that a figure measured over one slice of chain
@@ -708,23 +715,26 @@ measured anywhere else. Its closing note flagged this result as needing the
 same check, since it was taken over the most recent 400,001 blocks only.
 
 Checked. `gap_cost` now takes `ZUTREEXO_GAP_END`, so any era can be sampled.
-**All figures below use the sparse 637-byte proof** — see the correction note.
+**All figures below use the sparse 925-byte proof measured against Orchard's
+real 50.4M-leaf tree** — see the two correction notes.
 
 | 400,000-block window | nullifiers/block | share of a compact sync | 1 note | 10 notes | 100 notes |
 |---|---|---|---|---|---|
-| **1,000,000–1,400,000** — Sapling era, pre-NU5 | 0.7 | 7.0% | 13,201× | 1,320× | 132× |
-| **1,350,000–1,750,000** — sandblasting | 5.3 | **3.1%** | **107,371×** | 10,737× | 1,074× |
-| **3,057,000–3,457,000** — tip | 3.4 | 14.8% | 69,040× | 6,904× | 690× |
+| **1,000,000–1,400,000** — Sapling era, pre-NU5 | 0.7 | 7.0% | 9,091× | 909× | 91× |
+| **1,350,000–1,750,000** — sandblasting | 5.3 | **3.1%** | **73,941×** | 7,394× | 739× |
+| **3,057,000–3,457,000** — tip | 3.4 | 14.8% | 47,545× | 4,754× | 475× |
 
 Crossovers, same basis:
 
 | wallet | pre-NU5 | sandblasting | tip |
 |---|---|---|---|
-| 1 note | 30 blocks | 4 blocks | 6 blocks |
-| 10 notes | 303 blocks | 37 blocks | 58 blocks |
-| 100 notes | 3,030 blocks (~63 h) | 373 blocks (~7.8 h) | 579 blocks (~12 h) |
+| 1 note | 44 blocks | 5 blocks | 8 blocks |
+| 10 notes | 440 blocks | 54 blocks | 84 blocks |
+| 100 notes | 4,400 blocks (~92 h) | 541 blocks (~11 h) | 841 blocks (~17.5 h) |
 
 **The direction holds in every era; the magnitude spans a factor of eight.**
+(8.1×, unchanged by the 2026-08-28 correction below: rescaling every row by the
+same 1.452 cannot move a ratio between rows.)
 Proofs win in all three, and a wallet offline more than about a day is better
 off with them everywhere. The spread tracks shielded activity almost exactly —
 scanning cost is linear in nullifiers revealed, a proof costs the same either
@@ -754,6 +764,24 @@ framing penalises the other.
 > 1362/637. Comparing a new measurement against an old one without checking
 > they were taken the same way is the same error D32 is about, one level down:
 > not the wrong era, the wrong units.
+
+> **Second correction, 2026-08-28 — the 637-byte basis was itself wrong.**
+> The note above put all three eras on the sparse 637-byte proof. That figure
+> was measured against a **65,536-leaf** tree, and Orchard holds **50,392,547**.
+> A sparse proof carries one hash per *non-empty* sibling, so it grows 32 bytes
+> per doubling of the set: 925 B at Orchard's real size, not 637 B.
+>
+> All three eras have been **re-measured**, not rescaled, and every one came
+> back at exactly 1/1.452 of its previous figure — which is the arithmetic
+> check that the only thing that changed was the denominator. The table above
+> now carries the corrected numbers; the 13,201× / 107,371× / 69,040× row is
+> superseded.
+>
+> The conclusion is untouched: proofs still win in every era, the spread is
+> still 8×, and a wallet offline more than about a day is still better off with
+> them everywhere. What moved is the size of the win. `docs/design.md` D37 has
+> the measurement and the per-pool consequence — 637 B is correct for Ironwood,
+> which really is a 2^16-scale tree, so proof size has to be quoted per pool.
 
 ### The trust caveat, which is not a footnote
 
@@ -922,6 +950,67 @@ cheaper at p50 rather than 1.7×.
 
 ---
 
+## Phase 6b — what a private spend-status query costs, 2026-08-28
+
+`docs/design.md` D37. Measured by
+`crates/zutreexo-testkit/src/bin/cohort_cost.rs` against a depth-40 tree holding
+Orchard's real 50,392,547 nullifiers — 21 GB, three minutes to build. The tree,
+the cohort selection, the path deduplication and the wire encoding are all real;
+only the nullifier *values* are modelled, as a seeded uniform draw, which is the
+distribution hash outputs actually have.
+
+The query being priced: instead of naming a nullifier, the wallet names a
+`b`-bit prefix and settles membership locally from everything in that range.
+
+| prefix | cohort *k* | nodes | encoded | naive *k*×proof | dedup saves | vs one proof |
+|---|---|---|---|---|---|---|
+| 8 bits | 196,885 | 1,403,137 | 59.53 MB | 173.68 MB | 65.7% | 67,484× |
+| 12 bits | 12,298 | 136,678 | 5.35 MB | 10.85 MB | 50.6% | 6,070× |
+| **16 bits** | **768** | **11,614** | **449.7 KB** | 693.9 KB | **35.2%** | **498×** |
+| 20 bits | 49 | 939 | 35.7 KB | 44.4 KB | 19.6% | 40× |
+| 24 bits | 3.8 | 88 | 3.4 KB | 3.5 KB | 2.9% | 4× |
+
+`k` includes the predecessor leaf, which is a witness rather than a candidate,
+so the anonymity set is `k − 1`.
+
+**A 768-member anonymity set costs 449.7 KB** — 498× a single proof, and still
+98× cheaper than the 43.98 MB a 400,000-block scan costs at tip. The capability
+D35 declared undeliverable is deliverable; the open question is price, not
+possibility.
+
+Two things worth carrying forward:
+
+**Deduplication flatters small trees.** At `k ≈ 973` in a 250,000-leaf tree it
+saves 52.6%, against 35.2% for a similar `k` at mainnet scale, because a cohort
+that is a large fraction of a small pool has heavily converging paths. Anyone
+re-measuring this on a toy tree will get a better answer than the truth.
+
+**Above 20 bits the cohort format loses to a plain proof.** At `k ≈ 1` the
+per-node level and index fields cost more than the sparse path's bitmap, so the
+"dedup" column goes negative. The cohort is a tool for large anonymity sets and
+should not be used where the set is one.
+
+### Per-pool anonymity is the binding constraint
+
+Prefix width has to be chosen per pool, and the pools span three orders of
+magnitude:
+
+| pool | nullifiers | cohort at *b* = 16 |
+|---|---|---|
+| Orchard | 50,392,547 | 769 |
+| Sapling | 2,129,852 | 32 |
+| Sprout | 1,547,198 | 24 |
+| **Ironwood** | **70,380** | **1.07** |
+
+At 16 bits an Ironwood query names a single note. Reaching `k ≈ 760` there needs
+a prefix wide enough to pull 1.1% of the pool, and the entire Ironwood nullifier
+set is only 2.25 MB — so downloading the whole thing is competitive with any
+cohort large enough to hide in. The likely shape of a real answer is a **split
+by pool size**, and Ironwood is not transitional: CLAUDE.md §7 records that it
+and Orchard both stay live indefinitely.
+
+---
+
 ## Phase 4b — sparse proof paths, re-measured, 2026-08-20
 
 `docs/design.md` D28 changed the wire format: sibling hashes that are the
@@ -938,9 +1027,30 @@ a byte census; these are the measurements.
 | saved | **53.2%** |
 
 Projected at 631; the extra six bytes are the pool, depth and height the
-response now carries explicitly. This halves every crossover in the Phase 5a
-table: a 100-note wallet breaks even against scanning at roughly 590 blocks
-instead of 1,262.
+response now carries explicitly.
+
+> **Correction, 2026-08-28 — this table describes a tree 768× too small.**
+>
+> The 637 bytes were measured against a **65,536-leaf** tree. The tool's comment
+> justified that as "putting the occupied levels well below the depth, which is
+> the regime the whole chain is in", and **that reasoning is wrong**: the sparse
+> encoding omits siblings equal to the empty-subtree hash, so the count of
+> *non-empty* siblings is `log2(occupied)` and has nothing to do with the gap
+> between occupancy and depth. The proof grows a flat 32 bytes per doubling:
+>
+> | occupied leaves | sparse proof |
+> |---|---|
+> | 65,536 (2^16) | 637 B |
+> | 1,000,000 | 733 B |
+> | 8,000,000 | 829 B |
+> | **50,392,547 — Orchard** | **925 B** |
+>
+> So 637 B is right for **Ironwood** (70,380 nullifiers, genuinely a 2^16-scale
+> tree) and wrong for **Orchard**, which is the pool most notes are in. The
+> 53.2% saving against dense is unaffected — both forms grow together — but every
+> ratio computed from 637 B was overstated by 925/637 = **1.452×**. Corrected in
+> the Phase 5a tables below. `gap_cost` now takes the leaf count as a parameter
+> rather than hardcoding either figure. See `docs/design.md` D37.
 
 ### The compact-node bundle — heights 0–150,000
 

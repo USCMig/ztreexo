@@ -14,6 +14,9 @@
 //!    is the identity. Two encodings of one proof would mean two hashes of one
 //!    object the moment anything commits to proof bytes.
 
+use std::collections::BTreeMap;
+
+use crate::cohort::{CohortProof, CohortResponse, PrefixRange};
 use crate::hash::{Hash, HASH_LEN};
 use crate::imt::{
     empty_subtree_hashes, InsertionProof, Leaf, NonMembershipProof, Value, MAX_DEPTH,
@@ -452,6 +455,172 @@ impl CanonicalSerialize for NonMembershipResponse {
             },
         })
     }
+}
+
+/// Wire form of a prefix cohort ([`crate::cohort`]).
+///
+/// # Layout, and why the leaf indices are delta-coded
+///
+/// ```text
+/// pool:u8  depth:u8  bits:u8  lo:[u8;32]  height:u32
+/// leaf_count:u32   then per leaf: index_delta:varint, leaf(72 B)
+/// node_count:u32   then per node: level:u8, index_delta:varint, hash(32 B)
+/// ```
+///
+/// Cohort leaf indices are insertion-order positions scattered across a
+/// 40-deep tree, so each is a full `u64` in absolute form: 8 bytes × ~800
+/// leaves is 6.4 KB of pure index. Ascending order makes the deltas small, and
+/// a varint makes small deltas cheap. The same applies to node indices within
+/// a level.
+///
+/// The range travels as `bits` plus `lo` rather than as a prefix integer,
+/// because `lo` is what the verifier needs and deriving it from a prefix means
+/// re-implementing the masking in [`crate::cohort::PrefixRange::covering`] on
+/// the reading side. `hi` is not sent: it is a function of `lo` and `bits`.
+impl CanonicalSerialize for CohortResponse {
+    fn write_body(&self, out: &mut Vec<u8>) {
+        out.push(self.proof.pool.code());
+        out.push(self.proof.depth);
+        out.push(self.proof.range.bits());
+        out.extend_from_slice(self.proof.range.lo().as_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+
+        let leaf_count = u32::try_from(self.proof.leaves.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&leaf_count.to_le_bytes());
+        let mut previous = 0u64;
+        for (index, leaf) in self.proof.leaves.iter().take(leaf_count as usize) {
+            write_varint(index.wrapping_sub(previous), out);
+            previous = *index;
+            write_leaf(leaf, out);
+        }
+
+        let node_count = u32::try_from(self.proof.nodes.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&node_count.to_le_bytes());
+        let mut previous_level = 0u8;
+        let mut previous_index = 0u64;
+        for ((level, index), hash) in self.proof.nodes.iter().take(node_count as usize) {
+            // Nodes come out of a BTreeMap keyed by (level, index), so they are
+            // already grouped by level and ascending within it. Reset the delta
+            // base at each level boundary.
+            if *level != previous_level {
+                previous_index = 0;
+                previous_level = *level;
+            }
+            out.push(*level);
+            write_varint(index.wrapping_sub(previous_index), out);
+            previous_index = *index;
+            out.extend_from_slice(hash);
+        }
+    }
+
+    fn read_body(reader: &mut Reader<'_>) -> Result<Self, ProofCodecError> {
+        let code = reader.u8()?;
+        let pool = PoolId::from_code(code).ok_or(ProofCodecError::UnknownPool { code })?;
+        let depth = reader.u8()?;
+        let bits = reader.u8()?;
+        let lo = Value::from_bytes(reader.hash()?);
+        let height = reader.u32_le()?;
+
+        let range = PrefixRange::covering(lo, bits).map_err(|_| ProofCodecError::Malformed {
+            reason: "invalid cohort prefix width",
+        })?;
+        if range.lo() != lo {
+            // `lo` must already be aligned to its bucket. An unaligned bound
+            // would answer for a range no prefix describes, and two different
+            // encodings would then mean the same cohort.
+            return Err(ProofCodecError::Malformed {
+                reason: "cohort lower bound is not aligned to its prefix",
+            });
+        }
+
+        let leaf_count = reader.u32_le()?;
+        // One leaf is 72 bytes plus at least one index byte, so a declared
+        // count the remaining input cannot hold is rejected before allocating.
+        // This is D29's lesson: the guard has to check the direction that
+        // actually matters.
+        if u64::from(leaf_count) > reader.remaining() as u64 / 73 {
+            return Err(ProofCodecError::Malformed {
+                reason: "cohort declares more leaves than the input can hold",
+            });
+        }
+        let mut leaves = Vec::with_capacity(leaf_count as usize);
+        let mut previous = 0u64;
+        for _ in 0..leaf_count {
+            let delta = read_varint(reader)?;
+            let index = previous
+                .checked_add(delta)
+                .ok_or(ProofCodecError::Malformed {
+                    reason: "cohort leaf index overflows",
+                })?;
+            previous = index;
+            leaves.push((index, read_leaf(reader)?));
+        }
+
+        let node_count = reader.u32_le()?;
+        // A node is 33 bytes plus at least one index byte.
+        if u64::from(node_count) > reader.remaining() as u64 / 34 {
+            return Err(ProofCodecError::Malformed {
+                reason: "cohort declares more nodes than the input can hold",
+            });
+        }
+        let mut nodes = BTreeMap::new();
+        let mut previous_level = 0u8;
+        let mut previous_index = 0u64;
+        for _ in 0..node_count {
+            let level = reader.u8()?;
+            if level != previous_level {
+                previous_index = 0;
+                previous_level = level;
+            }
+            let delta = read_varint(reader)?;
+            let index = previous_index
+                .checked_add(delta)
+                .ok_or(ProofCodecError::Malformed {
+                    reason: "cohort node index overflows",
+                })?;
+            previous_index = index;
+            nodes.insert((level, index), reader.hash()?);
+        }
+
+        Ok(CohortResponse {
+            height,
+            proof: CohortProof {
+                pool,
+                depth,
+                range,
+                leaves,
+                nodes,
+            },
+        })
+    }
+}
+
+/// LEB128, unsigned. Small deltas cost one byte.
+fn write_varint(mut value: u64, out: &mut Vec<u8>) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
+}
+
+/// Reads a LEB128 unsigned integer, rejecting over-long encodings.
+fn read_varint(reader: &mut Reader<'_>) -> Result<u64, ProofCodecError> {
+    let mut value = 0u64;
+    for shift in (0..64).step_by(7) {
+        let byte = reader.u8()?;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(ProofCodecError::Malformed {
+        reason: "varint is longer than 64 bits",
+    })
 }
 
 /// Encodes an insertion proof with the derivable siblings omitted.

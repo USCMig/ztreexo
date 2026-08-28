@@ -87,6 +87,20 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 98.3,
         "min_branches": 83,  # exact: 83/88, five unreachable guards excluded
     },
+    # The prefix-cohort construction (D37). Same reasoning as `proof.rs`: it
+    # decodes bridge-supplied bytes and its `resolve` runs on a cohort a hostile
+    # bridge chose the contents of, so it is gated on its own rather than
+    # averaged away.
+    #
+    # 46 of 56 branches. The uncovered sides are `CorruptTree` guards on a tree
+    # whose value index disagrees with its leaf vector, which no public mutator
+    # can produce -- the same class enumerated in CLAUDE.md's amended Phase 1
+    # DoD for `imt.rs`, and kept for the same reason.
+    "crates/zutreexo-accumulator/src/cohort.rs": {
+        "regions": 96.8,
+        "lines": 97.2,
+        "min_branches": 44,  # measured 46/56
+    },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average.
     "crates/zutreexo-accumulator/src/proof.rs": {
@@ -217,6 +231,15 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "never_measured": (
             "operational entry point — samples a live zebrad to measure wallet "
             "sync cost against gap length. Reporting only; it computes no state."
+        ),
+    },
+    "crates/zutreexo-testkit/src/bin/cohort_cost.rs": {
+        "never_measured": (
+            "operational entry point — builds a 50.4M-leaf tree at production "
+            "depth to measure prefix-cohort cost (D37). 21 GB and three "
+            "minutes; reporting only, it computes no state the workspace "
+            "depends on. The construction it measures is covered by "
+            "zutreexo-accumulator's cohort tests."
         ),
     },
     # Phase 5b's shadow runner. Same category again, and more so than the

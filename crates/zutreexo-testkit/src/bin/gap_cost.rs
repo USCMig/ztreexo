@@ -197,10 +197,31 @@ struct ProofSize {
 }
 
 fn measure_proof_size(depth: u8) -> ProofSize {
-    // A tree with a realistic number of nullifiers. 2^16 keeps the build fast
-    // while putting the occupied levels well below the depth, which is the
-    // regime the whole chain is in: 54.1M nullifiers is 2^25.7 against 2^40.
-    let count: u32 = 65_536;
+    // The tree must hold the number of nullifiers the pool actually holds.
+    //
+    // This used to build 2^16 leaves, justified by a comment reading "2^16
+    // keeps the build fast while putting the occupied levels well below the
+    // depth, which is the regime the whole chain is in". That reasoning is
+    // wrong, and it understated every ratio this tool reports by 45%.
+    //
+    // The sparse encoding omits siblings equal to the empty-subtree hash. How
+    // many siblings are *non*-empty is `log2(occupied leaves)` — it does not
+    // depend on how far occupancy sits below `depth`. So the proof grows 32
+    // bytes per doubling of the set, measured:
+    //
+    // | occupied | sparse proof |
+    // |---|---|
+    // | 65,536 (2^16)     | 637 B |
+    // | 1,000,000 (2^20)  | 733 B |
+    // | 8,000,000 (2^23)  | 829 B |
+    // | 50,392,547 (2^25.6) | 925 B |
+    //
+    // Orchard holds 50,392,547 (`docs/benchmarks.md`), so 637 B was a figure
+    // for a pool 768x smaller than the one being claimed about.
+    //
+    // Overridable because the right count is per pool: Ironwood's 70,380
+    // genuinely is a 2^16-scale tree, and its proofs genuinely are ~637 B.
+    let count: u32 = env_u32("ZUTREEXO_PROOF_TREE_LEAVES", 50_392_547);
     let pool = PoolId::Orchard;
     let values: Vec<Value> = (1..=count)
         .map(|n| {

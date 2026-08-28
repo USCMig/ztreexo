@@ -1279,6 +1279,149 @@ a proof.
 
 ---
 
+## D37 — A private spend-status query costs 449.7 KB, and the published proof size was measured on the wrong tree
+
+**Phase 6b.** Measured against a depth-40 IMT holding Orchard's real nullifier
+count, 50,392,547 (`crates/zutreexo-testkit/src/bin/cohort_cost.rs`). 21 GB,
+three minutes to build.
+
+[D35](#d35--privacy-the-headline-capability-cannot-be-delivered-privately-as-designed)
+killed every privacy mitigation but one: reveal a `b`-bit **prefix** of the
+nullifier and receive enough of the tree to settle membership locally. It
+survives retrospective correlation, which is what defeats decoys, because the
+other cohort members are genuine nullifiers belonging to other people — they
+appear on-chain too, so the ambiguity is permanent rather than unmasked at
+spend time.
+
+D35 estimated that at "roughly 760 × 631 B ≈ 480 KB" and stopped, calling it a
+research direction. It is now built (`crates/zutreexo-accumulator/src/cohort.rs`)
+and measured.
+
+### What a cohort costs
+
+| prefix | cohort *k* | nodes | encoded | naive *k*×proof | dedup saves | vs one proof |
+|---|---|---|---|---|---|---|
+| 8 bits | 196,885 | 1,403,137 | 59.53 MB | 173.68 MB | 65.7% | 67,484× |
+| 12 bits | 12,298 | 136,678 | 5.35 MB | 10.85 MB | 50.6% | 6,070× |
+| **16 bits** | **768** | **11,614** | **449.7 KB** | 693.9 KB | **35.2%** | **498×** |
+| 20 bits | 49 | 939 | 35.7 KB | 44.4 KB | 19.6% | 40× |
+| 24 bits | 3.8 | 88 | 3.4 KB | 3.5 KB | 2.9% | 4× |
+
+`k` counts the predecessor leaf, which is a witness rather than a candidate, so
+the anonymity set is `k − 1`.
+
+**D35's estimate was accurate and its reasoning was not.** It predicted
+`k ≈ 760` (measured 768) and 480 KB (measured 449.7 KB), but reached that
+figure by multiplying a proof size that was 31% too small by a cohort size it
+then did not deduplicate — two errors that happened to cancel. Path
+deduplication is worth **35.2%** at this scale, not the ~20% predicted before
+measuring.
+
+Dedup is strongly `k`-dependent, and in a way that flatters small test trees: at
+`k ≈ 973` in a 250,000-leaf tree it saves 52.6%, because a cohort that is a
+large fraction of a small pool has heavily converging paths. Any measurement of
+this taken at toy scale overstates the saving. Which is the second finding.
+
+### The published sparse proof size was measured on a tree 768× too small
+
+`gap_cost` built its sample tree at 2^16 = 65,536 leaves, justified by a comment
+reading *"2^16 keeps the build fast while putting the occupied levels well below
+the depth, which is the regime the whole chain is in: 54.1M nullifiers is 2^25.7
+against 2^40."*
+
+**That reasoning is wrong.** The sparse encoding omits siblings equal to the
+canonical empty-subtree hash ([D28](#d28--sparse-proof-paths-omit-the-siblings-both-sides-can-derive)).
+The count of *non-empty* siblings on a path is `log2(occupied leaves)`; it does
+not depend on how far occupancy sits below `depth`. So the proof grows a flat 32
+bytes per doubling of the set:
+
+| occupied | sparse proof |
+|---|---|
+| 65,536 (2^16) | **637 B** ← the published figure |
+| 1,000,000 | 733 B |
+| 8,000,000 | 829 B |
+| 50,392,547 (2^25.6) | **925 B** |
+
+`cohort_cost` reproduces 637 B exactly at 2^16, so the two tools agree and the
+only difference is set size.
+
+**Every Phase 5a ratio for an Orchard-pool note was overstated by
+925 / 637 = 1.452×.** Re-measured over the same tip window (3,057,000–3,457,000)
+with the corrected tree, the headline goes from **69,040× to 47,545×** and the
+one-note crossover from 6 blocks to **8**. The direction is untouched and the
+conclusion is untouched; the numbers were wrong.
+
+This is the third instance of the same failure in this project — a denominator
+measured under conditions the claim does not hold. [D32](#d32) compared eras;
+the era comparison itself mixed sparse and dense bases; this one compared pool
+sizes. The pattern is worth naming: **a ratio is only as good as the conditions
+its denominator was measured under, and those conditions are never in the
+number.**
+
+One thing partly rescues it: **637 B is correct for Ironwood**, which holds
+70,380 nullifiers and genuinely is a 2^16-scale tree. Proof size is per pool, so
+`gap_cost` now takes the leaf count as a parameter defaulting to Orchard's real
+size rather than hardcoding either figure.
+
+### Per-pool anonymity is the binding constraint, not bandwidth
+
+Prefix width has to be chosen per pool, and the pools differ by three orders of
+magnitude:
+
+| pool | nullifiers | cohort at *b* = 16 |
+|---|---|---|
+| Orchard | 50,392,547 | 769 |
+| Sapling | 2,129,852 | 32 |
+| Sprout | 1,547,198 | 24 |
+| **Ironwood** | **70,380** | **1.07** |
+
+At 16 bits an Ironwood query names a single note. Reaching `k ≈ 760` there means
+a prefix so wide it pulls 1.1% of the pool — and the entire Ironwood nullifier
+set is only 2.25 MB, so shipping the whole thing is competitive with any cohort
+large enough to hide in. The likely shape of a real answer is therefore
+**split by pool size**: whole-set download for small pools, prefix cohorts for
+large ones, with a crossover that falls out of these numbers.
+
+Ironwood is the newest pool and the one CLAUDE.md §7 says will remain live
+indefinitely alongside Orchard, so this is not a transitional detail.
+
+### What is decided and what is not
+
+**Decided:** the mitigation works, it is buildable, and at Orchard scale a
+768-member anonymity set costs 449.7 KB — 498× a single proof, and still 98×
+cheaper than the 43.98 MB a 400,000-block scan costs. The capability D35
+declared undeliverable is deliverable; the question was only ever the price.
+
+**Not decided:** whether 768 is enough anonymity, which is policy rather than
+measurement, and whether the value-ordered layout is worth its cost. A cohort in
+a value-ordered tree is a contiguous subtree — one path plus the range,
+projected near 25 KB against the measured 449.7 KB — but value-ordered insertion
+breaks the IMT's append-only property, which is the reason indexed Merkle trees
+use insertion order in the first place. That is step 2.
+
+### Security of the construction
+
+Two attacks, handled in different places, and the split is not obvious:
+
+* **Tampering** — a forged leaf or node fails the fold against the trusted root.
+  Ordinary Merkle security.
+* **Omission** — a bridge drops an in-range leaf. This does **not** fail the
+  fold. Deleting a leaf while leaving the node set alone does, which is
+  misleading, and an early version of the test was fooled by exactly that; a
+  bridge that recomputes the deduplication for the shorter cohort produces a
+  perfectly valid Merkle proof of a smaller set. It is caught in `resolve`
+  instead, where the bracketing leaf's own `next_value` must not point into the
+  range at a value the cohort failed to deliver. **Omission must not read as
+  absence**, and that is a linked-list check, not a hash check.
+
+The decoder was given its bit-flip and truncation sweep at the time it was
+written, per PLAN.md's standing rule. It needed it: removing the leaf-count
+guard and feeding a declared `u32::MAX` gives `memory allocation of
+343597383600 bytes failed` and SIGABRT — [D29](#d29--a-length-guard-that-only-checked-one-direction)
+reproduced exactly in a decoder written two phases after D29 was fixed.
+
+---
+
 ## D36 — Fuzz budget: four of five targets saturated in under two hours
 
 **Phase 6.** The 72-hour run launched 2026-08-22 finished 2026-08-25 05:44:01
