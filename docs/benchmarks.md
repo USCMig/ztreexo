@@ -1019,24 +1019,33 @@ Above 20 bits the sorted form loses its advantage and at 24 bits it is barely
 better than a plain proof — at `k ≈ 1` the fixed header and fringe dominate.
 Both cohort forms are tools for large anonymity sets.
 
-### Per-pool anonymity is the binding constraint
+### Per pool, at the target — measured 2026-08-28
 
-Prefix width has to be chosen per pool, and the pools span three orders of
-magnitude:
+`docs/design.md` D39. Each pool at its real nullifier count, with the prefix
+chosen as the widest that still reaches `k = 12,298`.
 
-| pool | nullifiers | cohort at *b* = 16 |
-|---|---|---|
-| Orchard | 50,392,547 | 769 |
-| Sapling | 2,129,852 | 32 |
-| Sprout | 1,547,198 | 24 |
-| **Ironwood** | **70,380** | **1.07** |
+| pool | nullifiers | bits | members | cohort | whole set | serve |
+|---|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 12 | 12,278 | **384.6 KB** | 1,537.86 MB | cohort |
+| Sapling | 2,129,852 | 7 | 16,619 | **520.2 KB** | 65.00 MB | cohort |
+| Sprout | 1,547,198 | 6 | 24,125 | **754.7 KB** | 47.22 MB | cohort |
+| Ironwood | 70,380 | 2 | 17,591 | **550.3 KB** | 2.15 MB | cohort |
 
-At 16 bits an Ironwood query names a single note. Reaching `k ≈ 760` there needs
-a prefix wide enough to pull 1.1% of the pool, and the entire Ironwood nullifier
-set is only 2.25 MB — so downloading the whole thing is competitive with any
-cohort large enough to hide in. The likely shape of a real answer is a **split
-by pool size**, and Ironwood is not transitional: CLAUDE.md §7 records that it
-and Orchard both stay live indefinitely.
+**Every pool reaches the target and every cohort beats the whole set** —
+Ironwood's by 4×. Whole run: 21.8 s, 5.8 GB peak, Orchard accounting for nearly
+all of both.
+
+Cost per member is 31.3 / 32.0 / 32.0 / 32.0 bytes. Across pools spanning 716×
+in size the cohorts differ by 2×, and that residue is only the gap between the
+target and the next power of two. **Wire cost is set by the anonymity asked
+for, not by which pool is asked about** — which is the number a bridge needs
+for its response cap and rate limiter.
+
+An earlier note here predicted a split by pool size, on the arithmetic that a
+16-bit prefix names a single Ironwood note. True, and beside the point: that
+fixes the prefix and reads off the anonymity, where the target is the anonymity
+and the prefix is what you solve for. A small pool takes a *wider* prefix, and a
+wide prefix over a small pool is cheap. Superseded by the table above.
 
 ---
 

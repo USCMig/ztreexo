@@ -266,6 +266,14 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "zutreexo-accumulator's cohort tests."
         ),
     },
+    "crates/zutreexo-testkit/src/bin/pool_cohorts.rs": {
+        "never_measured": (
+            "operational entry point — builds a sorted tree per pool at real "
+            "mainnet nullifier counts to answer whether every pool reaches the "
+            "anonymity target (D39). 5.8 GB; reporting only. Its one piece of "
+            "logic, `widest_prefix`, has unit tests inside the binary."
+        ),
+    },
     # Phase 5b's shadow runner. Same category again, and more so than the
     # others: it follows the *live* chain tip for hours and its most
     # interesting path — reorg recovery — fires only when mainnet reorgs, which

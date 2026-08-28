@@ -1279,6 +1279,85 @@ a proof.
 
 ---
 
+## D39 — Every pool reaches the target, and no per-pool split is needed
+
+**Phase 6b, step 3.** Measured against each pool's real nullifier count
+(`crates/zutreexo-testkit/src/bin/pool_cohorts.rs`), at the chosen target of
+`k = 12,298`.
+
+| pool | nullifiers | bits | members | cohort | whole set | serve |
+|---|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 12 | 12,278 | **384.6 KB** | 1,537.86 MB | cohort |
+| Sapling | 2,129,852 | 7 | 16,619 | **520.2 KB** | 65.00 MB | cohort |
+| Sprout | 1,547,198 | 6 | 24,125 | **754.7 KB** | 47.22 MB | cohort |
+| **Ironwood** | **70,380** | **2** | **17,591** | **550.3 KB** | 2.15 MB | **cohort** |
+
+**Every pool serves the target with a cohort, and every cohort beats shipping
+the whole set — Ironwood's by 4×.** The split
+[D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+predicted is not needed. One rule covers all four: **pick the widest prefix
+whose expected cohort still reaches the target.**
+
+### Why D37 got this wrong
+
+D37 wrote:
+
+> At 16 bits an Ironwood query names a single note. Reaching `k ≈ 760` there
+> means a prefix so wide it pulls 1.1% of the pool — and the entire Ironwood
+> nullifier set is only 2.25 MB, so shipping the whole thing is competitive with
+> any cohort large enough to hide in.
+
+Both facts are true and the conclusion does not follow. That reasoning **fixed
+the prefix width and asked what anonymity fell out**, which is backwards: the
+target is the anonymity, and the prefix is what you solve for. A pool with few
+nullifiers does not need a narrow prefix, it needs a *wide* one — and a wide
+prefix over a small pool is cheap precisely because the pool is small.
+
+Ironwood at 2 bits pulls a quarter of the pool and that quarter is 17,591
+members, which **exceeds** the target Orchard meets at 12 bits. The small pool
+is not the hard case; it was only made to look like one by holding `b` fixed at
+a value chosen for a pool 716× larger.
+
+### Cost tracks the target, not the pool
+
+The four cohorts cost 384.6 KB, 520.2 KB, 754.7 KB and 550.3 KB — a 2× spread
+across pools spanning **716×** in size. Per member they are 31.3 B, 32.0 B,
+32.0 B and 32.0 B.
+
+That is the sorted layout's property stated at the level that matters for
+operations: **the wire cost of a private query is set by how much anonymity you
+ask for, and is very nearly independent of which pool you ask about.** A bridge
+sizing its rate limiter and its response cap needs one number, not four. The
+spread that remains is only the difference between the target and the next
+power of two above it.
+
+### The fallback still exists and stays cheap
+
+`widest_prefix` returns zero when even a one-bit prefix would fall below the
+target — for a pool holding fewer than `2 × target` nullifiers, no prefix can
+hide a note among enough others, and the whole set is the only honest answer.
+For a pool that small the whole set is trivial: at the target, the boundary is
+24,596 nullifiers, or 787 KB. Tested rather than assumed, including the
+`n == target` and zero-target edges.
+
+This matters because Ironwood was 70,380 nullifiers at measurement and a **new
+pool activates with none**. The rule degrades correctly: whole set while tiny,
+then cohorts once there is a crowd to hide in.
+
+### What this does not settle
+
+**Intersection across a wallet's own notes.** Each query reveals one bucket.
+A wallet holding ten notes and querying all of them reveals ten buckets, and
+that *set* is more identifying than any single member of it — at Orchard's 4,096
+buckets, ten draws is a fairly distinctive fingerprint, even though each draw
+individually hides among 12,278. The measurement here is per-query anonymity and
+says nothing about the correlation across a wallet's queries. Mitigations exist
+in principle — query padding, reusing one wide bucket for several notes, spacing
+requests — and none is measured. **This is the open privacy question now**, and
+it is a different shape from the one D35 raised.
+
+---
+
 ## D38 — 12,288-member anonymity for 384.9 KB, from a sorted snapshot the IMT never sees
 
 **Phase 6b, step 2.** Measured at Orchard's real 50,392,547 nullifiers
