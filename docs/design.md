@@ -1279,6 +1279,111 @@ a proof.
 
 ---
 
+## D40 — Per-note anonymity is 12,302. Per-wallet anonymity is 1.
+
+**Phase 6b, step 4.** Simulated over 100,000 wallets holding ten notes each
+(`crates/zutreexo-testkit/src/bin/wallet_privacy.rs`), against Orchard's real
+nullifier count.
+
+[D39](#d39--every-pool-reaches-the-target-and-no-per-pool-split-is-needed) closed
+the per-query question and recorded what it did not cover. This is that.
+
+A wallet holding `n` notes must query `n` buckets, so the bridge sees a **set**
+of bucket indices. That set is a property of the wallet, not of any note, and it
+is stable — nullifiers do not move between buckets.
+
+| bits | buckets | per-query *k* | wallets uniquely identified | wallet-level *k* | one session |
+|---|---|---|---|---|---|
+| 2 | 4 | 12,598,136 | 0.0% | 62,146 | 1.40 GB |
+| 4 | 16 | 3,149,534 | 14.2% | 3.3 | 734.4 MB |
+| 6 | 64 | 787,383 | 100.0% | 1.0 | 223.0 MB |
+| 8 | 256 | 196,845 | 100.0% | 1.0 | 59.0 MB |
+| 10 | 1,024 | 49,211 | 100.0% | 1.0 | 14.9 MB |
+| **12 — the operating point** | 4,096 | **12,302** | **100.0%** | **1.0** | 3.8 MB |
+
+**At the chosen operating point every simulated wallet is uniquely
+identifiable.** The per-note figure and the per-wallet figure are 12,302 and 1.
+
+Reaching a wallet-level anonymity set at all requires `b ≤ 4`, where a session
+costs **734 MB** against 3.8 MB — 193× — and even that buys a class of only 3.3.
+A meaningful 62,146 needs `b = 2` and **1.40 GB a session**. Widening the
+prefix does not trade gracefully; it falls off a cliff.
+
+### What this is and is not
+
+It is **linkability, not disclosure**. The bridge learns a stable pseudonym for
+the wallet and how many notes it holds. It does not learn which notes: each
+individual query still hides its note among 12,302, and that part of
+[D38](#d38--12288-member-anonymity-for-3849-kb-from-a-sorted-snapshot-the-imt-never-sees)
+stands unchanged.
+
+Against the status quo that is still an improvement — asking a bridge for a
+named nullifier reveals the exact note *and* links the wallet, so this removes
+the disclosure and keeps the linkage. It is not the unlinkability the framing in
+D37 and D38 implied, and those numbers should be read with this attached.
+
+### Decoy buckets fail, for a different reason than decoy nullifiers
+
+[D35](#d35--privacy-the-headline-capability-cannot-be-delivered-privately-as-designed)
+killed decoy *nullifiers* by retrospective correlation: the real one appears
+on-chain when the note is spent and the decoys never do.
+
+Decoy **buckets** are not exposed that way — a bucket holds 12,302 genuine
+nullifiers belonging to other people, so no bucket is ever unmasked as fake.
+That looked promising. The attack that applies instead is **intersection across
+sessions**: fresh decoys each time, and the real buckets are the ones that
+recur.
+
+| decoys | buckets asked | sessions to isolate | cost per session |
+|---|---|---|---|
+| 0 | 10 | 1 | 3.8 MB |
+| 5 | 15 | 2 | 5.6 MB |
+| 10 | 20 | 2 | 7.5 MB |
+| 25 | 35 | 2 | 13.2 MB |
+| 50 | 60 | 3 | 22.6 MB |
+| 100 | 110 | 3 | 41.4 MB |
+
+**Ten times as many decoys buys two extra sessions.** A wallet checking spend
+status daily is fully isolated within three days, having paid 41.4 MB a session
+for the privilege. Decoys are defeated here as thoroughly as in D35, by an
+unrelated mechanism — worth recording, because the reason D35 gives does not
+apply and it would be easy to conclude decoys therefore work.
+
+### The one mitigation that survives
+
+Give no single bridge the whole fingerprint.
+
+| buckets per bridge | wallets uniquely identified | wallet-level *k* | bridges for 10 notes |
+|---|---|---|---|
+| **1** | **0.0%** | **25.4** | **10** |
+| 2 | 98.7% | 1.0 | 5 |
+| 3 | 100.0% | 1.0 | 4 |
+| 5 | 100.0% | 1.0 | 2 |
+
+The cliff is between one bucket and two. At one bucket per bridge nothing is
+distinguishable; at two, 98.7% of wallets already are. So the requirement is
+**one non-colluding bridge per note**, which is a demanding assumption and not a
+protocol change — it is an operational one, and it fails silently if the bridges
+collude or if several are run by one operator.
+
+The 25.4 is bounded by the 100,000-wallet simulation — it is
+`population / buckets` and would rise with a real population. The shape is what
+matters: identifiability arrives almost immediately as buckets accumulate.
+
+### Where this leaves Phase 6b
+
+**Delivered:** a private-per-note spend-status query at 384.9 KB for a
+12,302-member anonymity set, on any pool, with no change to any frozen format.
+That is real and it is new.
+
+**Not delivered:** wallet unlinkability. Bandwidth cannot buy it, decoys cannot
+buy it, and the only thing that can is a bridge-per-note deployment assumption.
+
+**Phase 7's gate is unchanged and still shut.** CLAUDE.md requires the privacy
+review be clean; it is cleaner than D35 left it and it is not clean.
+
+---
+
 ## D39 — Every pool reaches the target, and no per-pool split is needed
 
 **Phase 6b, step 3.** Measured against each pool's real nullifier count

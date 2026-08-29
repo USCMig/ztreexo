@@ -274,6 +274,13 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "logic, `widest_prefix`, has unit tests inside the binary."
         ),
     },
+    "crates/zutreexo-testkit/src/bin/wallet_privacy.rs": {
+        "never_measured": (
+            "operational entry point — simulates a wallet population to measure "
+            "how identifying a wallet's bucket set is (D40). Reporting only; its "
+            "logic has unit tests inside the binary."
+        ),
+    },
     # Phase 5b's shadow runner. Same category again, and more so than the
     # others: it follows the *live* chain tip for hours and its most
     # interesting path — reorg recovery — fires only when mainnet reorgs, which

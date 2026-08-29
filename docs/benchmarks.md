@@ -1019,6 +1019,31 @@ Above 20 bits the sorted form loses its advantage and at 24 bits it is barely
 better than a plain proof — at `k ≈ 1` the fixed header and fringe dominate.
 Both cohort forms are tools for large anonymity sets.
 
+### Wallet-level anonymity, 2026-08-29
+
+`docs/design.md` D40. 100,000 simulated wallets, ten notes each, Orchard.
+
+| bits | per-query *k* | wallets uniquely identified | wallet-level *k* | one session |
+|---|---|---|---|---|
+| 2 | 12,598,136 | 0.0% | 62,146 | 1.40 GB |
+| 4 | 3,149,534 | 14.2% | 3.3 | 734.4 MB |
+| 6 | 787,383 | 100.0% | 1.0 | 223.0 MB |
+| **12 — operating point** | **12,302** | **100.0%** | **1.0** | **3.8 MB** |
+
+**At the operating point every simulated wallet is uniquely identifiable.** The
+per-note anonymity set is 12,302 and the per-wallet one is 1. Buying a wallet
+anonymity set needs `b ≤ 4` and 734 MB a session, 193× the operating point, for
+a class of 3.3.
+
+Decoy buckets are stripped by intersection across sessions — 100 decoys at
+41.4 MB a session delay isolation to three sessions, against one with no decoys.
+Splitting queries across bridges works only at **one bucket per bridge**: at two
+buckets 98.7% of wallets are already unique.
+
+This is linkability rather than disclosure — the bridge learns a stable
+pseudonym and a note count, not which notes — and the per-note figures below are
+unaffected. They should be read with it attached.
+
 ### Per pool, at the target — measured 2026-08-28
 
 `docs/design.md` D39. Each pool at its real nullifier count, with the prefix
