@@ -1019,6 +1019,37 @@ Above 20 bits the sorted form loses its advantage and at 24 bits it is barely
 better than a plain proof — at `k ≈ 1` the fixed header and fringe dominate.
 Both cohort forms are tools for large anonymity sets.
 
+### Unlinkable sessions and the user base, 2026-08-31
+
+`docs/design.md` D41. Days until an adversary recovers a wallet's bucket set by
+intersecting the buckets seen in its active window, given one bucket per
+unlinkable session. The adversary is told when the wallet is active.
+
+| wallets | 1 second | 1 minute | 15 minutes | 1 hour | 6 hours | 1 day |
+|---|---|---|---|---|---|---|
+| 1,000 | 1 | 2 | 3 | 4 | 11 | 97 |
+| 10,000 | 2 | 3 | 6 | 20 | safe | safe |
+| 100,000 | 2 | 5 | 106 | safe | safe | safe |
+| 1,000,000 | 3 | 44 | safe | safe | safe | safe |
+
+**A burst always loses** — ten queries in one second are recovered within three
+days at every population, a million wallets included. Fresh circuits do not
+help when the queries are simultaneous.
+
+Crowd per bucket, the anonymity set of one unlinkable query: **2** at 1,000
+wallets, 24 at 10,000, 244 at 100,000, 2,439 at 1,000,000. A 1,000-user bridge
+protects nobody.
+
+The rule, which reproduces the sweep at every population:
+
+```text
+spread ≥ 10 × buckets × 86400 / (wallets × notes)   seconds
+```
+
+— 6 minutes at a million wallets, 59 minutes at a hundred thousand, 9.8 hours at
+ten thousand, and more than a day at a thousand, which is to say no safe setting
+exists there.
+
 ### Wallet-level anonymity, 2026-08-29
 
 `docs/design.md` D40. 100,000 simulated wallets, ten notes each, Orchard.

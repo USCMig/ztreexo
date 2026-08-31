@@ -281,6 +281,14 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "logic has unit tests inside the binary."
         ),
     },
+    "crates/zutreexo-testkit/src/bin/session_privacy.rs": {
+        "never_measured": (
+            "operational entry point — simulates the timing-intersection attack "
+            "against unlinkable single-bucket sessions to find the required "
+            "query spread and the minimum viable user base (D41). Reporting "
+            "only; its logic has unit tests inside the binary."
+        ),
+    },
     # Phase 5b's shadow runner. Same category again, and more so than the
     # others: it follows the *live* chain tip for hours and its most
     # interesting path — reorg recovery — fires only when mainnet reorgs, which

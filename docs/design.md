@@ -1279,6 +1279,112 @@ a proof.
 
 ---
 
+## D41 — Unlinkable sessions work, but only above a user base, and never in a burst
+
+**Phase 6b, step 5.** Simulated over 180 days
+(`crates/zutreexo-testkit/src/bin/session_privacy.rs`), Orchard, 12-bit buckets,
+ten-note wallets.
+
+[D40](#d40--per-note-anonymity-is-12302-per-wallet-anonymity-is-1) concluded the
+only surviving mitigation was one non-colluding bridge per note. That was too
+strong — corrected there, and this is the measurement behind the correction.
+
+Splitting across *bridges* is not the mechanism; splitting into **unlinkable
+sessions** is. A bridge cannot fingerprint a wallet it cannot re-join. So the
+question becomes whether it can re-join them by other means, and there are
+exactly two signals left once identity is gone: **timing** and **repetition**.
+
+Together they are the intersection attack again. Take the buckets seen inside
+the wallet's active window each day, intersect across days, and the wallet's own
+set is what survives — because only its buckets recur. Background traffic is the
+defence: every unrelated query in the window is noise the adversary must
+intersect away.
+
+The adversary here is given the **worst case**: it is told exactly when the
+wallet is active.
+
+### Days until the wallet's bucket set is recovered
+
+| wallets | 1 second | 1 minute | 15 minutes | 1 hour | 6 hours | 1 day |
+|---|---|---|---|---|---|---|
+| 1,000 | 1 | 2 | 3 | 4 | 11 | 97 |
+| 10,000 | 2 | 3 | 6 | 20 | safe | safe |
+| 100,000 | 2 | 5 | 106 | safe | safe | safe |
+| 1,000,000 | 3 | 44 | safe | safe | safe | safe |
+
+"safe" means no convergence within 180 days.
+
+**A burst always loses.** Ten queries in one second are recovered in one to
+three days at *every* population, including a million wallets. Fresh Tor
+circuits do not help: if the queries are simultaneous they are one session in
+everything but name. This is the single most important line in the table,
+because "use Tor" is the obvious advice and on its own it is worthless here.
+
+**The required spread scales inversely with the user base.** A million wallets
+are safe at fifteen minutes; a hundred thousand need an hour; ten thousand need
+six.
+
+### The crowd, and the launch problem
+
+| wallets | queries/day | wallets sharing any given bucket |
+|---|---|---|
+| 1,000 | 10,000 | **2** |
+| 10,000 | 100,000 | 24 |
+| 100,000 | 1,000,000 | 244 |
+| 1,000,000 | 10,000,000 | 2,439 |
+
+That last column is the anonymity set of one unlinkable single-bucket query, and
+it is thinnest exactly at launch. **A 1,000-user bridge protects nobody**: a
+crowd of 2, and isolation within 97 days even at maximum spread. The scheme's
+privacy is an emergent property of its adoption, which is an uncomfortable thing
+to depend on and needs saying plainly rather than being left implicit in a
+simulation parameter.
+
+### The design rule
+
+Safety is background queries inside the window against the number of buckets. A
+ratio near 1 leaves a wallet isolated in weeks; a ratio of about 10 holds for the
+full horizon. Solving for the window:
+
+```text
+spread ≥ 10 × buckets × 86400 / (wallets × notes)   seconds
+```
+
+| wallets | minimum spread | nearest safe window in the sweep |
+|---|---|---|
+| 1,000 | 4.1 days | beyond a day — no safe setting |
+| 10,000 | 9.8 hours | 1 day |
+| 100,000 | 59 minutes | 1 hour |
+| 1,000,000 | 6 minutes | 15 minutes |
+
+The rule reproduces the sweep at every population, which is the check that it is
+a description of the mechanism rather than a curve fit.
+
+### What a wallet should therefore do
+
+1. **One bucket per unlinkable session.** Fresh circuit per query.
+2. **Spread by the rule above**, with jitter, never on a fixed schedule — a
+   wallet that always checks at 09:00 re-links itself daily whatever else it
+   does.
+3. **Never burst.** The table's first column is the cost of getting this wrong,
+   and it is total.
+4. **Pad the query count** to a class rather than revealing `n` exactly.
+5. **Round the requested height** to the epoch boundary, so the snapshot asked
+   for is not itself a distinguisher.
+
+Multiple bridges still help and compose with all of this — but as insurance
+against one operator correlating by timing, not as the primary defence.
+
+### What is still not measured
+
+The simulation gives the adversary the wallet's window and otherwise assumes
+uniform background traffic. Real traffic is diurnal, and a wallet querying at
+03:00 local hides in a much thinner crowd than the daily average implies. The
+figures here are therefore an **upper bound on safety**, and the honest version
+of the rule probably wants the trough rate rather than the mean.
+
+---
+
 ## D40 — Per-note anonymity is 12,302. Per-wallet anonymity is 1.
 
 **Phase 6b, step 4.** Simulated over 100,000 wallets holding ten notes each
@@ -1361,10 +1467,20 @@ Give no single bridge the whole fingerprint.
 | 5 | 100.0% | 1.0 | 2 |
 
 The cliff is between one bucket and two. At one bucket per bridge nothing is
-distinguishable; at two, 98.7% of wallets already are. So the requirement is
-**one non-colluding bridge per note**, which is a demanding assumption and not a
-protocol change — it is an operational one, and it fails silently if the bridges
-collude or if several are run by one operator.
+distinguishable; at two, 98.7% of wallets already are.
+
+> **Corrected 2026-08-31 — "one bridge per note" is stronger than what this
+> shows.** The bridge being *distinct* is not what does the work; the sessions
+> being **unlinkable** is. One bridge receiving ten single-bucket queries it
+> cannot join holds ten independent observations, which is anonymity-equivalent
+> to ten bridges. The fingerprint measured above exists because `n` buckets
+> arrive together in one identifiable session.
+>
+> So the requirement is **one unlinkable session per bucket**, not one operator
+> per note — a far weaker assumption, and one Tor already meets.
+> [D41](#d41--unlinkable-sessions-work-but-only-above-a-user-base-and-never-in-a-burst)
+> measures whether a bridge can re-join those sessions anyway, and what the
+> deployment has to look like for it to hold.
 
 The 25.4 is bounded by the 100,000-wallet simulation — it is
 `population / buckets` and would rise with a real population. The shape is what
