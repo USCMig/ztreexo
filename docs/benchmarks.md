@@ -1105,6 +1105,91 @@ wide prefix over a small pool is cheap. Superseded by the table above.
 
 ---
 
+## Phase 6c — what an epoch policy costs, 2026-08-31
+
+```
+  cargo run --release -p zutreexo-testkit --bin epoch_cost
+  ZUTREEXO_EPOCH_FULL=1 cargo run --release -p zutreexo-testkit --bin epoch_cost
+```
+
+D38's sorted snapshot cannot be maintained incrementally — a nullifier lands in
+the middle of the value order and every leaf above it shifts — so a bridge
+rebuilds it whole on a schedule. That makes it an *epoch*, and an epoch needs a
+policy. This prices both knobs. Reasoning in `docs/design.md` D43.
+
+**Build times are extrapolated; resident bytes are exact.** A `SortedTree`'s
+size is fully determined by its depth (`values * 32`, plus 32 for each of
+`2^(depth+1) - 1` nodes), so there is nothing to sample. The formula is asserted
+against a real tree at every measured rung, and `ZUTREEXO_EPOCH_FULL=1` builds
+the real pools rather than modelling them.
+
+### Build rate, measured
+
+| values | depth | build | resident | ns/value |
+|---|---|---|---|---|
+| 10,000 | 14 | 0.00 s | 1.3 MB | 344.8 |
+| 100,000 | 17 | 0.03 s | 11.1 MB | 296.0 |
+| 1,000,000 | 20 | 0.26 s | 94.5 MB | 262.2 |
+| 10,000,000 | 24 | 3.46 s | 1.30 GB | 346.3 |
+
+Cost tracks `2^depth` leaf slots, not the value count, so it **steps at each
+power of two**: 4,097 values cost what 8,192 cost. Extrapolation is on slots for
+that reason — a per-value fit understates exactly the pools sitting just past a
+boundary.
+
+### Per pool, at mainnet counts
+
+| pool | nullifiers | depth | build | keep=1 | keep=2 | keep=4 |
+|---|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 26 | 23.24 s | **5.50 GB** | 11.00 GB | 22.01 GB |
+| Sapling | 2,129,852 | 22 | 1.45 s | 321.0 MB | 642.0 MB | 1.25 GB |
+| Sprout | 1,547,198 | 21 | 0.73 s | 175.2 MB | 350.4 MB | 700.9 MB |
+| Ironwood | 70,380 | 17 | 0.05 s | 10.1 MB | 20.3 MB | 40.6 MB |
+| **all four** | | | **25.5 s** | **6.00 GB** | **11.99 GB** | 23.98 GB |
+
+### The interval trade
+
+| interval | wall clock | bridge duty cycle | delta (mean) | delta (worst) |
+|---|---|---|---|---|
+| 100 | 2.1 h | 0.34% | 14.5 KB | 28.9 KB |
+| 500 | 10.4 h | 0.07% | 72.4 KB | 144.8 KB |
+| **1,000** | **20.8 h** | **0.03%** | **144.8 KB** | **289.5 KB** |
+| 2,000 | 41.7 h | 0.02% | 289.5 KB | 579.0 KB |
+| 5,000 | 104.2 h | 0.01% | 723.8 KB | 1.4 MB |
+| 10,000 | 208.3 h | 0.00% | 1.4 MB | 2.8 MB |
+| 50,000 | 1041.7 h | 0.00% | 7.1 MB | 14.1 MB |
+
+*Delta* is what a wallet scans for itself because the snapshot predates it:
+nullifiers revealed since, at 32 bytes, across all pools, at the 9.264/block
+measured in Phase 0. *Mean* assumes uniform arrival within the epoch; *worst* is
+a wallet arriving just before the next snapshot.
+
+### The two findings
+
+**The interval is bounded by the client, not the bridge.** 25.5 s of rebuild in
+a 20.8-hour epoch is a duty cycle of 0.03%; nothing in that column argues for a
+longer interval. What bounds it is the delta against the 384.9 KB cohort the
+wallet came for. **Break-even is 1,330 blocks (27.7 h)** — past that a wallet
+downloads more delta than cohort. The default interval is 1,000, just inside it.
+
+**Retention was set wrong and the measurement is what said so.** `keep` was 2,
+to absorb a rebuild landing between a client's manifest fetch and its query.
+Priced, that is **6 GB against one extra round trip per client per 20.8 hours**,
+on a race that resolves itself — `NO_SUCH_EPOCH`, refetch, retry. The default is
+now 1, which is also the better privacy answer: several live epochs give the
+bridge a second coordinate to group queries on, and D40 already showed
+aggregation is where per-note anonymity goes to die.
+
+### Peak is twice steady state, for 23 seconds
+
+The store inserts the new snapshot before evicting the old, so a bridge at
+`keep = 1` holds two Orchard trees — 11 GB — for the length of the rebuild.
+Evicting first would halve the peak and leave the bridge answering
+`NO_SUCH_EPOCH` to everyone for 23 s. Recorded because it has to be budgeted
+for, not discovered.
+
+---
+
 ## Phase 4b — sparse proof paths, re-measured, 2026-08-20
 
 `docs/design.md` D28 changed the wire format: sibling hashes that are the

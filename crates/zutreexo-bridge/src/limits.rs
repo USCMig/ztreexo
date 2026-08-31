@@ -66,6 +66,23 @@ pub struct Limits {
     /// seen. Bounds the limiter's own memory, which is otherwise a way to
     /// attack the thing meant to prevent attacks.
     pub max_tracked_peers: usize,
+    /// Bytes of cohort payload one address may pull per minute. Zero disables.
+    ///
+    /// # Why counting requests is not enough
+    ///
+    /// The two limits guard different resources and the request counter is the
+    /// wrong instrument for this one. A cohort at the operating point is
+    /// **384.9 KB** (`docs/design.md` D38), so a peer sitting politely inside
+    /// `requests_per_minute` of 600 pulls 231 MB a minute — from a
+    /// single-threaded bridge, on a link it does not pay for. Every other
+    /// response this server sends is orders of magnitude smaller, which is why
+    /// nothing needed a byte budget until cohorts existed.
+    ///
+    /// Charged on *actual* serialised bytes, after the cohort is built. The
+    /// CPU spent building it is bounded by the request counter instead; a
+    /// budget cannot refuse work whose size it does not yet know without
+    /// guessing, and a guess that runs low would refuse honest clients.
+    pub cohort_bytes_per_minute: u64,
 }
 
 impl Default for Limits {
@@ -83,6 +100,12 @@ impl Default for Limits {
             max_response_bytes: 8 * 1024 * 1024,
             requests_per_minute: 600,
             max_tracked_peers: 4096,
+            // 64 MiB is ~170 cohorts a minute at the measured size. A wallet
+            // resolving its whole note set does tens of queries per sync and
+            // D41 says to *spread* them rather than burst, so this is generous
+            // for any client following the privacy guidance and tight against
+            // one that is not.
+            cohort_bytes_per_minute: 64 * 1024 * 1024,
         }
     }
 }
@@ -96,16 +119,26 @@ impl Limits {
             write_timeout: Duration::from_secs(60),
             request_deadline: Duration::from_secs(120),
             requests_per_minute: 0,
+            cohort_bytes_per_minute: 0,
             ..Limits::default()
         }
     }
 }
 
-/// One peer's token bucket.
+/// One peer's token buckets: one counting requests, one counting bytes.
+///
+/// Both live in the same entry so a peer occupies one map slot rather than
+/// two — otherwise the eviction cap in [`Limits::max_tracked_peers`] would
+/// mean half as many peers as it says.
 #[derive(Clone, Copy, Debug)]
 struct Bucket {
     tokens: f64,
+    bytes: f64,
     last: Instant,
+    /// Separate from `last` because the two buckets refill on independent
+    /// clocks: a peer that makes cheap requests must not thereby refill its
+    /// byte allowance, and vice versa.
+    last_bytes: Instant,
 }
 
 /// Per-address token-bucket rate limiter.
@@ -123,6 +156,7 @@ struct Bucket {
 #[derive(Debug)]
 pub struct RateLimiter {
     per_minute: u32,
+    bytes_per_minute: u64,
     capacity: usize,
     peers: BTreeMap<IpAddr, Bucket>,
 }
@@ -132,6 +166,7 @@ impl RateLimiter {
     pub fn new(limits: &Limits) -> RateLimiter {
         RateLimiter {
             per_minute: limits.requests_per_minute,
+            bytes_per_minute: limits.cohort_bytes_per_minute,
             capacity: limits.max_tracked_peers.max(1),
             peers: BTreeMap::new(),
         }
@@ -171,9 +206,12 @@ impl RateLimiter {
             }
         }
 
+        let byte_burst = self.bytes_per_minute as f64;
         let bucket = self.peers.entry(peer).or_insert(Bucket {
             tokens: burst,
+            bytes: byte_burst,
             last: now,
+            last_bytes: now,
         });
 
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
@@ -186,6 +224,62 @@ impl RateLimiter {
         } else {
             false
         }
+    }
+
+    /// Whether `peer` may be sent `bytes` of cohort payload now, spending the
+    /// budget if so.
+    ///
+    /// Called with the response already serialised, so a refusal here costs the
+    /// bridge the work and saves it the bandwidth. That is the right way round:
+    /// bandwidth is the scarce resource a cohort consumes, and the CPU is
+    /// already bounded by [`RateLimiter::allow`].
+    pub fn allow_bytes(&mut self, peer: IpAddr, bytes: u64) -> bool {
+        self.allow_bytes_at(peer, bytes, Instant::now())
+    }
+
+    /// The same, with the clock supplied.
+    pub fn allow_bytes_at(&mut self, peer: IpAddr, bytes: u64, now: Instant) -> bool {
+        if self.bytes_per_minute == 0 {
+            return true;
+        }
+        let burst = self.bytes_per_minute as f64;
+        let refill_per_sec = burst / 60.0;
+
+        if !self.peers.contains_key(&peer) && self.peers.len() >= self.capacity {
+            if let Some(&oldest) = self
+                .peers
+                .iter()
+                .min_by_key(|(_, bucket)| bucket.last.min(bucket.last_bytes))
+                .map(|(address, _)| address)
+            {
+                self.peers.remove(&oldest);
+            }
+        }
+
+        let requests = f64::from(self.per_minute);
+        let bucket = self.peers.entry(peer).or_insert(Bucket {
+            tokens: requests,
+            bytes: burst,
+            last: now,
+            last_bytes: now,
+        });
+
+        let elapsed = now
+            .saturating_duration_since(bucket.last_bytes)
+            .as_secs_f64();
+        bucket.bytes = (bucket.bytes + elapsed * refill_per_sec).min(burst);
+        bucket.last_bytes = now;
+
+        let cost = bytes as f64;
+        // A single response larger than the whole budget would otherwise be
+        // unservable forever, no matter how long the peer waited. Refusing it
+        // is correct — the budget is the operator's statement about what this
+        // bridge will emit — but it must be a refusal, not a stall.
+        if cost > bucket.bytes {
+            return false;
+        }
+        bucket.bytes -= cost;
+        true
     }
 }
 
@@ -280,6 +374,140 @@ mod tests {
             "tracked {} addresses against a cap of 8",
             limiter.tracked()
         );
+    }
+
+    #[test]
+    fn the_byte_budget_refuses_a_peer_the_request_counter_would_wave_through() {
+        // The reason the second bucket exists. At the default 600 requests a
+        // minute and D38's 384.9 KB cohort, a peer inside the request limit
+        // pulls 231 MB — so the counter alone is not a bandwidth control.
+        let mut limiter = RateLimiter::new(&Limits {
+            requests_per_minute: 600,
+            cohort_bytes_per_minute: 1_000_000,
+            ..Limits::default()
+        });
+        let now = Instant::now();
+        let cohort = 384_900u64;
+
+        for i in 0..2 {
+            assert!(limiter.allow_at(ip(1), now), "request {i} refused");
+            assert!(
+                limiter.allow_bytes_at(ip(1), cohort, now),
+                "bytes {i} refused"
+            );
+        }
+        // The third cohort is 1,154,700 bytes cumulative against a 1 MB budget.
+        assert!(
+            limiter.allow_at(ip(1), now),
+            "the request counter still has 597 tokens, so it must allow this"
+        );
+        assert!(
+            !limiter.allow_bytes_at(ip(1), cohort, now),
+            "the byte budget must refuse what the request counter allows"
+        );
+    }
+
+    #[test]
+    fn the_byte_budget_refills_on_its_own_clock() {
+        // Not on the request bucket's. A peer making cheap calls must not
+        // thereby refill its cohort allowance, and a peer spending bytes must
+        // not lose its cheap calls.
+        let mut limiter = RateLimiter::new(&Limits {
+            requests_per_minute: 60,
+            cohort_bytes_per_minute: 600,
+            ..Limits::default()
+        });
+        let start = Instant::now();
+        assert!(limiter.allow_bytes_at(ip(1), 600, start));
+        assert!(!limiter.allow_bytes_at(ip(1), 1, start));
+
+        // Spending request tokens must not move the byte bucket.
+        for _ in 0..10 {
+            assert!(limiter.allow_at(ip(1), start));
+        }
+        assert!(
+            !limiter.allow_bytes_at(ip(1), 1, start),
+            "cheap requests refilled the byte budget"
+        );
+
+        // 600/minute is 10 bytes a second.
+        assert!(limiter.allow_bytes_at(ip(1), 10, start + Duration::from_secs(1)));
+        assert!(!limiter.allow_bytes_at(ip(1), 1, start + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_response_larger_than_the_whole_budget_is_refused_rather_than_stalling() {
+        // Waiting would never help: the bucket caps at one minute's worth, so
+        // a response above that is unservable no matter how long the peer
+        // idles. It has to be a refusal the client can see.
+        let mut limiter = RateLimiter::new(&Limits {
+            cohort_bytes_per_minute: 1_000,
+            ..Limits::default()
+        });
+        let start = Instant::now();
+        assert!(!limiter.allow_bytes_at(ip(1), 5_000, start));
+        assert!(
+            !limiter.allow_bytes_at(ip(1), 5_000, start + Duration::from_secs(3600)),
+            "an hour of idling must not buy more than one burst"
+        );
+        // And it did not consume the budget on the way to refusing.
+        assert!(limiter.allow_bytes_at(ip(1), 1_000, start));
+    }
+
+    #[test]
+    fn byte_budgets_are_per_peer() {
+        let mut limiter = RateLimiter::new(&Limits {
+            cohort_bytes_per_minute: 100,
+            ..Limits::default()
+        });
+        let now = Instant::now();
+        assert!(limiter.allow_bytes_at(ip(1), 100, now));
+        assert!(!limiter.allow_bytes_at(ip(1), 1, now));
+        assert!(
+            limiter.allow_bytes_at(ip(2), 100, now),
+            "one greedy peer must not deny everyone — that is the attack"
+        );
+    }
+
+    #[test]
+    fn a_peer_occupies_one_slot_whichever_bucket_it_touches() {
+        // Both buckets share an entry. If they did not, `max_tracked_peers`
+        // would mean half what it says and the limiter's own memory bound
+        // would be wrong.
+        let mut limiter = RateLimiter::new(&Limits {
+            requests_per_minute: 10,
+            cohort_bytes_per_minute: 1_000,
+            max_tracked_peers: 8,
+            ..Limits::default()
+        });
+        let start = Instant::now();
+        for i in 0..200u8 {
+            let at = start + Duration::from_millis(u64::from(i));
+            limiter.allow_at(ip(i), at);
+            limiter.allow_bytes_at(ip(i), 1, at);
+        }
+        assert!(
+            limiter.tracked() <= 8,
+            "tracked {} addresses against a cap of 8",
+            limiter.tracked()
+        );
+    }
+
+    #[test]
+    fn a_zero_byte_budget_disables_only_the_byte_budget() {
+        let mut limiter = RateLimiter::new(&Limits {
+            requests_per_minute: 2,
+            cohort_bytes_per_minute: 0,
+            ..Limits::default()
+        });
+        let now = Instant::now();
+        for _ in 0..1_000 {
+            assert!(limiter.allow_bytes_at(ip(1), u64::MAX, now));
+        }
+        // The request counter is untouched by that.
+        assert!(limiter.allow_at(ip(1), now));
+        assert!(limiter.allow_at(ip(1), now));
+        assert!(!limiter.allow_at(ip(1), now));
     }
 
     #[test]

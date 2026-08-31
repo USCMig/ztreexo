@@ -18,6 +18,11 @@
 //! * [`Request::BlockProofBundle`] — everything needed to apply one block.
 //! * [`Request::NullifierNonMembership`] — proof that one nullifier is unspent.
 //! * [`Request::AccumulatorRoots`] — the roots a client anchors against.
+//! * [`Request::PrefixCohort`] — every nullifier in one prefix bucket of one
+//!   snapshot epoch, which is how a wallet settles spend-status **without
+//!   naming the note**.
+//! * [`Request::EpochManifest`] — which snapshots exist and how wide a bucket
+//!   must be.
 //!
 //! CLAUDE.md also lists `GetUtxoInclusionProofs(outpoints)`. It is deliberately
 //! absent: every caller identified so far wants the inclusion proofs *for a
@@ -35,21 +40,35 @@
 //! one is a real metadata leak and is the Phase 6 privacy question; asking for
 //! a *specific* nullifier's proof tells the bridge which note is about to be
 //! spent.
+//!
+//! [`Request::PrefixCohort`] is the answer to that, and it is a partial one.
+//! It replaces "which note" with "which of ~12,298 notes", which
+//! `docs/design.md` D40 measured as per-*note* anonymity of 12,302 and
+//! per-*wallet* anonymity of **1** — a wallet's set of buckets fingerprints it
+//! even though no single bucket does. D41 gives the condition under which
+//! spreading the queries across unlinkable sessions recovers it. Neither the
+//! fingerprint nor the spreading rule is enforced here: this crate serves the
+//! query, and how a client spaces its queries is the client's problem.
 
+pub mod epoch;
 pub mod limits;
 pub mod server;
 pub mod wire;
 
 use std::collections::BTreeMap;
 
+use zutreexo_accumulator::cohort::PrefixRange;
 use zutreexo_accumulator::imt::Value;
 use zutreexo_accumulator::proof::NonMembershipResponse;
+use zutreexo_accumulator::sorted::SortedCohort;
 use zutreexo_accumulator::{Hash, PoolId};
 use zutreexo_chain::{
     apply_and_prove, ApplyOptions, BlockProofBundle, BlockSummary, BundleError, ChainAccumulators,
 };
 
-pub use wire::{Request, Roots, WIRE_VERSION};
+use crate::epoch::{EpochPolicy, EpochStore};
+
+pub use wire::{EpochManifest, Request, Roots, WIRE_VERSION};
 
 /// The full accumulator state, plus the bundles it has produced.
 ///
@@ -72,15 +91,29 @@ pub struct Bridge {
     state: ChainAccumulators,
     bundles: BTreeMap<u32, BlockProofBundle>,
     keep: usize,
+    /// Sorted snapshots, which are what cohort queries are answered from. The
+    /// live IMT cannot answer them: its leaves are in insertion order, so a
+    /// value-range is not contiguous there. See [`epoch`].
+    epochs: EpochStore,
 }
 
 impl Bridge {
     /// Wraps existing accumulator state, retaining `keep` recent bundles.
+    ///
+    /// Cohort service is on, under [`EpochPolicy::default`]. A bridge that only
+    /// serves bundles should use [`Bridge::with_epoch_policy`] and
+    /// [`EpochPolicy::disabled`] rather than pay for snapshots it never serves.
     pub fn new(state: ChainAccumulators, keep: usize) -> Bridge {
+        Bridge::with_epoch_policy(state, keep, EpochPolicy::default())
+    }
+
+    /// The same, with the snapshot policy chosen explicitly.
+    pub fn with_epoch_policy(state: ChainAccumulators, keep: usize, policy: EpochPolicy) -> Bridge {
         Bridge {
             state,
             bundles: BTreeMap::new(),
             keep,
+            epochs: EpochStore::new(policy),
         }
     }
 
@@ -89,8 +122,12 @@ impl Bridge {
         &self.state
     }
 
-    /// Applies a block and retains the bundle it produced.
-    pub fn apply(&mut self, summary: &BlockSummary) -> Result<(), BundleError> {
+    /// Applies a block, retains the bundle, and snapshots on an epoch boundary.
+    ///
+    /// The snapshot happens *after* the apply, so an epoch at height `H`
+    /// describes the state including block `H` — which is what a client
+    /// assumes when it scans blocks `H+1..tip` for the delta.
+    pub fn apply(&mut self, summary: &BlockSummary) -> Result<(), BridgeError> {
         let (_, bundle) = apply_and_prove(&mut self.state, summary, ApplyOptions::default())?;
         self.bundles.insert(summary.height, bundle);
         while self.bundles.len() > self.keep {
@@ -103,7 +140,78 @@ impl Bridge {
             };
             self.bundles.remove(&oldest);
         }
+        if self.epochs.due(summary.height) {
+            self.epochs
+                .snapshot(&self.state, summary.height)
+                .map_err(|error| BridgeError::Snapshot {
+                    reason: error.to_string(),
+                })?;
+        }
         Ok(())
+    }
+
+    /// The snapshot store, for callers that want to inspect retention.
+    pub fn epochs(&self) -> &EpochStore {
+        &self.epochs
+    }
+
+    /// Forces a snapshot at the current tip, outside the epoch schedule.
+    ///
+    /// For a bridge brought up from a restored state, which would otherwise
+    /// serve nothing until it happened to reach a boundary.
+    pub fn snapshot_now(&mut self) -> Result<usize, BridgeError> {
+        let height = self.state.tip().unwrap_or(0);
+        self.epochs
+            .snapshot(&self.state, height)
+            .map_err(|error| BridgeError::Snapshot {
+                reason: error.to_string(),
+            })
+    }
+
+    /// What snapshots this bridge holds, and the prefix floor for each.
+    pub fn manifest(&self) -> EpochManifest {
+        EpochManifest {
+            min_anonymity: self.epochs.policy().min_anonymity,
+            epochs: self.epochs.entries(),
+        }
+    }
+
+    /// Answers a prefix-bucket query against one snapshot epoch.
+    ///
+    /// The bridge never learns which value in the returned run the client
+    /// cared about — it is not told, and it cannot infer it from a run it
+    /// returned whole.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::NoSuchEpoch`] for a snapshot that has been evicted or was
+    /// never taken, and [`BridgeError::PrefixTooNarrow`] for a bucket whose
+    /// expected occupancy is under the policy's anonymity floor. The second is
+    /// a refusal rather than a silent widening: see
+    /// [`status::PREFIX_TOO_NARROW`](wire::status::PREFIX_TOO_NARROW).
+    pub fn prove_cohort(
+        &self,
+        pool: PoolId,
+        epoch: u32,
+        range: PrefixRange,
+    ) -> Result<SortedCohort, BridgeError> {
+        let snapshot = self
+            .epochs
+            .get(pool, epoch)
+            .ok_or(BridgeError::NoSuchEpoch { pool, epoch })?;
+        let max_bits =
+            epoch::max_bits_for(snapshot.leaf_count(), self.epochs.policy().min_anonymity);
+        if max_bits == 0 || range.bits() > max_bits {
+            return Err(BridgeError::PrefixTooNarrow {
+                asked: range.bits(),
+                max: max_bits,
+            });
+        }
+        snapshot
+            .prove_prefix_cohort(range)
+            .map_err(|error| BridgeError::Prove {
+                reason: error.to_string(),
+            })
     }
 
     /// The bundle for one height, if still retained.
@@ -177,5 +285,34 @@ pub enum BridgeError {
     Prove {
         /// What the accumulator said.
         reason: String,
+    },
+
+    /// A block could not be applied or its bundle produced.
+    #[error(transparent)]
+    Bundle(#[from] BundleError),
+
+    /// A snapshot could not be built at an epoch boundary.
+    #[error("could not snapshot: {reason}")]
+    Snapshot {
+        /// What the sorted-tree builder said.
+        reason: String,
+    },
+
+    /// No snapshot is retained for that pool at that height.
+    #[error("no snapshot for pool {pool} at height {epoch}")]
+    NoSuchEpoch {
+        /// Pool asked about.
+        pool: PoolId,
+        /// Epoch height asked about.
+        epoch: u32,
+    },
+
+    /// The bucket asked for is narrower than the anonymity floor allows.
+    #[error("prefix of {asked} bits is narrower than the floor of {max}")]
+    PrefixTooNarrow {
+        /// Width the client asked for.
+        asked: u8,
+        /// Widest width the bridge will answer. Zero means none will do.
+        max: u8,
     },
 }

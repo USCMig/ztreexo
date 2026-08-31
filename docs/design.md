@@ -1279,6 +1279,182 @@ a proof.
 
 ---
 
+## D43 — The epoch interval is bounded by the client; retention is bounded by 6 GB
+
+**Phase 6c, step 2.** Measured with
+`crates/zutreexo-testkit/src/bin/epoch_cost.rs`. Build times are extrapolated
+from a measured rate over slot count (`ZUTREEXO_EPOCH_FULL=1` measures them
+directly); resident bytes are computed exactly from the tree's depth and the
+formula is asserted against a real tree at every rung, so a wrong model shows
+up as a mismatch rather than as a plausible number.
+
+A `SortedTree` (D38) cannot be maintained incrementally: a nullifier lands in
+the middle of the value order and every leaf above it shifts. It is rebuilt
+whole, which makes it an **epoch snapshot**, which needs a policy — how often to
+rebuild, and how many to keep. Both knobs were guessed when the code was
+written. The measurement changed one of them.
+
+### Snapshot cost, per pool
+
+| pool | nullifiers | depth | build | keep=1 | keep=2 |
+|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 26 | 23.24 s | **5.50 GB** | 11.00 GB |
+| Sapling | 2,129,852 | 22 | 1.45 s | 321.0 MB | 642.0 MB |
+| Sprout | 1,547,198 | 21 | 0.73 s | 175.2 MB | 350.4 MB |
+| Ironwood | 70,380 | 17 | 0.05 s | 10.1 MB | 20.3 MB |
+| **all four** | | | **25.5 s** | **6.00 GB** | **11.99 GB** |
+
+Measured build rate: 346.3 ns/value at 10⁷ values. Cost is dominated by hashing
+`2^depth` leaf slots rather than by the values themselves, so it **steps at each
+power of two** — 4,097 values cost what 8,192 cost, and nearly twice what 4,096
+cost. Extrapolation is therefore on slot count, not value count; a per-value fit
+would understate exactly the pools sitting just past a boundary.
+
+### The interval is not the bridge's problem
+
+| interval | wall clock | bridge duty cycle | client delta (mean) | client delta (worst) |
+|---|---|---|---|---|
+| 100 | 2.1 h | 0.34% | 14.5 KB | 28.9 KB |
+| 500 | 10.4 h | 0.07% | 72.4 KB | 144.8 KB |
+| **1,000** | **20.8 h** | **0.03%** | **144.8 KB** | **289.5 KB** |
+| 2,000 | 41.7 h | 0.02% | 289.5 KB | 579.0 KB |
+| 10,000 | 208.3 h | 0.00% | 1.4 MB | 2.8 MB |
+| 50,000 | 1041.7 h | 0.00% | 7.1 MB | 14.1 MB |
+
+**The bridge barely notices the interval.** Rebuilding all four pools is 25.5 s
+out of a 20.8-hour epoch. Nothing in that column argues for a longer interval.
+
+What bounds it is the **client delta**: a snapshot at height `H` answers as of
+`H`, and a wallet must scan `H+1..tip` itself for anything revealed since. At
+the 9.264 nullifiers/block measured in Phase 0, that is 289.5 KB worst case at
+an interval of 1,000, against the 384.9 KB cohort the wallet came for.
+
+**Break-even is 1,330 blocks (27.7 h).** Past that a wallet downloads more
+delta than cohort and the snapshot is carrying less than half its own weight.
+So the interval is 1,000 — just inside — and 2,000 is not defensible.
+
+The delta is *public chain data the wallet already has*, so this is a cost and
+not a correctness problem. It is still the client's cost, and the whole point of
+the cohort service is to move cost off the client.
+
+### Retention: the default was wrong, and the measurement is what said so
+
+`keep` was set to **2** on reasoning that sounds fine and is not: a client that
+fetches the manifest and then queries could be raced by a rebuild landing
+between the two calls, and a second retained epoch absorbs that.
+
+Priced, the trade is **6 GB against one extra round trip roughly once per 20.8
+hours per client**, on a race that resolves itself — the client sees
+`NO_SUCH_EPOCH`, refetches the manifest, retries. The default is now **1**.
+
+It is also the better privacy answer, which the original reasoning missed
+entirely. With several epochs live, *which* epoch a client picks is a second
+coordinate the bridge can group its queries on, on top of the bucket. D40 already
+showed that per-note anonymity does not survive being aggregated over a wallet's
+query set; handing the bridge another axis to aggregate on is the wrong
+direction. With one epoch there is no choice to make and nothing to distinguish.
+
+### Peak memory is twice the steady state, for 23 seconds
+
+`EpochStore::snapshot` inserts before it evicts, so a bridge at `keep = 1` still
+holds two Orchard trees — 11 GB — for the duration of the rebuild. Evicting
+first would halve the peak and leave the bridge with **no snapshot at all** for
+those 23 s, answering `NO_SUCH_EPOCH` to everyone. The transient allocation is
+the cheaper failure. It is recorded here because it has to be budgeted for
+rather than discovered on a 8 GB host.
+
+**What would change this.** NU7's possible 3× block-time change (CLAUDE.md §7)
+moves both columns at once: a third of the wall clock per interval, so a third
+of the delta, and three times the duty cycle — which is 0.03%, so the duty cycle
+does not begin to matter. The break-even in *blocks* is unaffected, because it
+is set by nullifiers per block against cohort size, and 3× faster blocks with
+the same transaction rate means fewer nullifiers per block, not more. A change
+in the *transaction* rate is what would move it, which is the reason CLAUDE.md
+§7 says to derive capacity from transactions rather than blocks.
+
+---
+
+## D42 — The bridge serves buckets, not nullifiers, and refuses to serve a narrow one
+
+**Phase 6c, step 1.** Before this, a wallet had exactly one way to ask a bridge
+whether its note was spent: `GetNullifierNonMembershipProof(pool, nullifier)` —
+which names the note, to the bridge, before the spend is public. D35 recorded
+that as the reason the Phase 5a headline is a measurement of a query a
+privacy-conscious wallet should not make. D37 and D38 built the alternative in
+the accumulator crate. **The bridge could not serve it**: the word "cohort"
+appeared nowhere in `zutreexo-bridge`, so nothing a wallet could actually run
+had changed.
+
+Two methods, `WIRE_VERSION` 1 → 2:
+
+| tag | request | body |
+|---|---|---|
+| 4 | `PrefixCohort { pool, epoch, bits, lo }` | `pool:1, epoch:4, bits:1, lo:32` |
+| 5 | `EpochManifest` | empty |
+
+The privacy property is in what the request **does not** contain. The client
+derives its bucket locally with `PrefixRange::covering`, sends the bucket,
+receives every nullifier in it, and settles membership itself with
+`sorted::resolve`. `cohort_service.rs` asserts this on the encoded bytes rather
+than arguing it from the type — and asserts the contrast, that the method it
+replaces *does* carry the value, so the check is testing something the old path
+would have failed.
+
+### The floor is refused, not widened, and it is published
+
+A wallet asking at 24 bits over Orchard names about three notes. The bridge
+refuses with `PREFIX_TOO_NARROW` rather than quietly widening the range.
+Widening is the tempting option and it is wrong twice over: the wallet would
+receive a proof for a range it did not ask about and has no reason to re-check,
+and the policy would be invisible to the only party whose privacy it protects.
+
+`max_bits` is therefore published per epoch in the manifest. A client that
+learns the floor *by being refused* has already told the bridge the narrow
+bucket it wanted, which is most of what the floor exists to prevent. Publishing
+it means the first cohort request a wallet ever sends is already wide enough.
+
+The floor is D39's arithmetic — `floor(log2(n / k))` at `k = 12,298` — moved out
+of the `pool_cohorts` reporting binary and into the library, because the server
+has to *enforce* it and not merely report it. A unit test pins it against the
+same four per-pool widths D39 published, so the bridge and the measurement
+cannot drift apart.
+
+**A pool holding fewer than `2k` nullifiers gets `max_bits = 0` and no cohort
+service at all**, because no split of it can put a wallet in a crowd of 12,298.
+The honest answer there is the whole nullifier set — 2.25 MB for Ironwood, cheap
+precisely because the pool is small. **That fallback is not built.** All four
+live pools clear the floor at the counts in `docs/benchmarks.md`, so nothing
+needs it today; a newly activated pool would.
+
+### A cohort is 385 KB, so counting requests stopped being a bandwidth control
+
+Every other response this server sends is small enough that
+`requests_per_minute` bounded bandwidth as a side effect. A cohort is 384.9 KB,
+so a peer sitting politely inside the default 600 requests a minute pulls
+**231 MB/min** from a single-threaded bridge on a link it does not pay for.
+
+`Limits` gains `cohort_bytes_per_minute` — a second token bucket, per peer,
+defaulting to 64 MiB — charged on actual serialised bytes and only on cohorts.
+Charging on refusals would let one over-budget request lock a peer out of the
+cheap methods, including the manifest that tells it when to come back. The two
+buckets share one map entry, so `max_tracked_peers` still means what it says.
+
+Charging *after* serialisation means the bridge pays the CPU and saves the
+bandwidth. That is the right way round: bandwidth is what a cohort actually
+consumes, and the CPU is already bounded by the request counter. A budget
+cannot refuse work whose size it does not yet know without guessing, and a
+guess that ran low would refuse honest clients.
+
+### What this does not fix
+
+D40 stands unchanged: this buys per-*note* anonymity of 12,302 and per-*wallet*
+anonymity of **1**. Nothing here enforces D41's spreading rule; the crate serves
+the query, and how a client spaces its queries is the client's problem. Saying
+otherwise would be the more dangerous error, because a wallet author reading
+"the bridge protects your privacy" would stop reading there.
+
+---
+
 ## D41 — Unlinkable sessions work, but only above a user base, and never in a burst
 
 **Phase 6b, step 5.** Simulated over 180 days
