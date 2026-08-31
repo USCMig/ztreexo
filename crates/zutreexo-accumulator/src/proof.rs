@@ -22,6 +22,7 @@ use crate::imt::{
     empty_subtree_hashes, InsertionProof, Leaf, NonMembershipProof, Value, MAX_DEPTH,
 };
 use crate::pool::PoolId;
+use crate::sorted::{SortedCohort, MAX_SORTED_DEPTH};
 use crate::utreexo::UtxoProof;
 
 /// Version byte prefixed to every top-level encoding.
@@ -177,6 +178,14 @@ impl<'a> Reader<'a> {
         let mut array = [0u8; 4];
         array.copy_from_slice(bytes);
         Ok(u32::from_le_bytes(array))
+    }
+
+    /// Consumes a little-endian `u16`.
+    pub fn u16_le(&mut self) -> Result<u16, ProofCodecError> {
+        let bytes = self.take(2)?;
+        let mut array = [0u8; 2];
+        array.copy_from_slice(bytes);
+        Ok(u16::from_le_bytes(array))
     }
 
     /// Consumes a little-endian `u64`.
@@ -591,6 +600,129 @@ impl CanonicalSerialize for CohortResponse {
                 leaves,
                 nodes,
             },
+        })
+    }
+}
+
+/// Wire form of a sorted-tree cohort ([`crate::sorted`]).
+///
+/// ```text
+/// pool:u8  depth:u8  bits:u8  lo:[u8;32]  height:u32
+/// leaf_count:u64  start_index:u64
+/// value_count:u32  then value_count x 32 B, ascending
+/// sibling_count:u16  then per sibling: level:u8, index_delta:varint, hash:32 B
+/// ```
+///
+/// Values travel raw rather than delta-coded. Nullifiers are hash outputs, so
+/// consecutive values in a large sorted set differ in their high bits and a
+/// delta is no smaller than the value -- the trick that pays in
+/// [`CohortResponse`], where the deltas are small leaf *indices*, does not
+/// transfer here.
+///
+/// `sibling_count` is a `u16` because the fringe is at most two per level and
+/// depth is capped at `MAX_SORTED_DEPTH`. That bound is the point of the whole
+/// structure: the proof is O(log n) while the payload is O(k).
+impl CanonicalSerialize for SortedCohort {
+    fn write_body(&self, out: &mut Vec<u8>) {
+        out.push(self.pool.code());
+        out.push(self.depth);
+        out.push(self.range.bits());
+        out.extend_from_slice(self.range.lo().as_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+        out.extend_from_slice(&self.leaf_count.to_le_bytes());
+        out.extend_from_slice(&self.start_index.to_le_bytes());
+
+        let value_count = u32::try_from(self.values.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&value_count.to_le_bytes());
+        for value in self.values.iter().take(value_count as usize) {
+            out.extend_from_slice(value.as_bytes());
+        }
+
+        let sibling_count = u16::try_from(self.siblings.len()).unwrap_or(u16::MAX);
+        out.extend_from_slice(&sibling_count.to_le_bytes());
+        let mut previous_level = 0u8;
+        let mut previous_index = 0u64;
+        for ((level, index), hash) in self.siblings.iter().take(sibling_count as usize) {
+            if *level != previous_level {
+                previous_index = 0;
+                previous_level = *level;
+            }
+            out.push(*level);
+            write_varint(index.wrapping_sub(previous_index), out);
+            previous_index = *index;
+            out.extend_from_slice(hash);
+        }
+    }
+
+    fn read_body(reader: &mut Reader<'_>) -> Result<Self, ProofCodecError> {
+        let code = reader.u8()?;
+        let pool = PoolId::from_code(code).ok_or(ProofCodecError::UnknownPool { code })?;
+        let depth = reader.u8()?;
+        if depth > MAX_SORTED_DEPTH {
+            return Err(ProofCodecError::Malformed {
+                reason: "sorted cohort depth exceeds the maximum",
+            });
+        }
+        let bits = reader.u8()?;
+        let lo = Value::from_bytes(reader.hash()?);
+        let height = reader.u32_le()?;
+        let leaf_count = reader.u64_le()?;
+        let start_index = reader.u64_le()?;
+
+        let range = PrefixRange::covering(lo, bits).map_err(|_| ProofCodecError::Malformed {
+            reason: "invalid cohort prefix width",
+        })?;
+        if range.lo() != lo {
+            return Err(ProofCodecError::Malformed {
+                reason: "cohort lower bound is not aligned to its prefix",
+            });
+        }
+
+        let value_count = reader.u32_le()?;
+        if u64::from(value_count) > reader.remaining() as u64 / 32 {
+            return Err(ProofCodecError::Malformed {
+                reason: "sorted cohort declares more values than the input can hold",
+            });
+        }
+        let mut values = Vec::with_capacity(value_count as usize);
+        for _ in 0..value_count {
+            values.push(Value::from_bytes(reader.hash()?));
+        }
+
+        let sibling_count = reader.u16_le()?;
+        if u64::from(sibling_count) > reader.remaining() as u64 / 34 {
+            return Err(ProofCodecError::Malformed {
+                reason: "sorted cohort declares more siblings than the input can hold",
+            });
+        }
+        let mut siblings = BTreeMap::new();
+        let mut previous_level = 0u8;
+        let mut previous_index = 0u64;
+        for _ in 0..sibling_count {
+            let level = reader.u8()?;
+            if level != previous_level {
+                previous_index = 0;
+                previous_level = level;
+            }
+            let delta = read_varint(reader)?;
+            let index = previous_index
+                .checked_add(delta)
+                .ok_or(ProofCodecError::Malformed {
+                    reason: "sorted cohort sibling index overflows",
+                })?;
+            previous_index = index;
+            siblings.insert((level, index), reader.hash()?);
+        }
+
+        Ok(SortedCohort {
+            pool,
+            depth,
+            height,
+            leaf_count,
+            range,
+            start_index,
+            values,
+            siblings,
         })
     }
 }

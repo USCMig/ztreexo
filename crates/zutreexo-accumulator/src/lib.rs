@@ -35,6 +35,7 @@ pub mod hash;
 pub mod imt;
 pub mod pool;
 pub mod proof;
+pub mod sorted;
 pub mod utreexo;
 
 pub use hash::{Hash, HASH_LEN};

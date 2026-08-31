@@ -1279,6 +1279,415 @@ a proof.
 
 ---
 
+## D41 — Unlinkable sessions work, but only above a user base, and never in a burst
+
+**Phase 6b, step 5.** Simulated over 180 days
+(`crates/zutreexo-testkit/src/bin/session_privacy.rs`), Orchard, 12-bit buckets,
+ten-note wallets.
+
+[D40](#d40--per-note-anonymity-is-12302-per-wallet-anonymity-is-1) concluded the
+only surviving mitigation was one non-colluding bridge per note. That was too
+strong — corrected there, and this is the measurement behind the correction.
+
+Splitting across *bridges* is not the mechanism; splitting into **unlinkable
+sessions** is. A bridge cannot fingerprint a wallet it cannot re-join. So the
+question becomes whether it can re-join them by other means, and there are
+exactly two signals left once identity is gone: **timing** and **repetition**.
+
+Together they are the intersection attack again. Take the buckets seen inside
+the wallet's active window each day, intersect across days, and the wallet's own
+set is what survives — because only its buckets recur. Background traffic is the
+defence: every unrelated query in the window is noise the adversary must
+intersect away.
+
+The adversary here is given the **worst case**: it is told exactly when the
+wallet is active.
+
+### Days until the wallet's bucket set is recovered
+
+| wallets | 1 second | 1 minute | 15 minutes | 1 hour | 6 hours | 1 day |
+|---|---|---|---|---|---|---|
+| 1,000 | 1 | 2 | 3 | 4 | 11 | 97 |
+| 10,000 | 2 | 3 | 6 | 20 | safe | safe |
+| 100,000 | 2 | 5 | 106 | safe | safe | safe |
+| 1,000,000 | 3 | 44 | safe | safe | safe | safe |
+
+"safe" means no convergence within 180 days.
+
+**A burst always loses.** Ten queries in one second are recovered in one to
+three days at *every* population, including a million wallets. Fresh Tor
+circuits do not help: if the queries are simultaneous they are one session in
+everything but name. This is the single most important line in the table,
+because "use Tor" is the obvious advice and on its own it is worthless here.
+
+**The required spread scales inversely with the user base.** A million wallets
+are safe at fifteen minutes; a hundred thousand need an hour; ten thousand need
+six.
+
+### The crowd, and the launch problem
+
+| wallets | queries/day | wallets sharing any given bucket |
+|---|---|---|
+| 1,000 | 10,000 | **2** |
+| 10,000 | 100,000 | 24 |
+| 100,000 | 1,000,000 | 244 |
+| 1,000,000 | 10,000,000 | 2,439 |
+
+That last column is the anonymity set of one unlinkable single-bucket query, and
+it is thinnest exactly at launch. **A 1,000-user bridge protects nobody**: a
+crowd of 2, and isolation within 97 days even at maximum spread. The scheme's
+privacy is an emergent property of its adoption, which is an uncomfortable thing
+to depend on and needs saying plainly rather than being left implicit in a
+simulation parameter.
+
+### The design rule
+
+Safety is background queries inside the window against the number of buckets. A
+ratio near 1 leaves a wallet isolated in weeks; a ratio of about 10 holds for the
+full horizon. Solving for the window:
+
+```text
+spread ≥ 10 × buckets × 86400 / (wallets × notes)   seconds
+```
+
+| wallets | minimum spread | nearest safe window in the sweep |
+|---|---|---|
+| 1,000 | 4.1 days | beyond a day — no safe setting |
+| 10,000 | 9.8 hours | 1 day |
+| 100,000 | 59 minutes | 1 hour |
+| 1,000,000 | 6 minutes | 15 minutes |
+
+The rule reproduces the sweep at every population, which is the check that it is
+a description of the mechanism rather than a curve fit.
+
+### What a wallet should therefore do
+
+1. **One bucket per unlinkable session.** Fresh circuit per query.
+2. **Spread by the rule above**, with jitter, never on a fixed schedule — a
+   wallet that always checks at 09:00 re-links itself daily whatever else it
+   does.
+3. **Never burst.** The table's first column is the cost of getting this wrong,
+   and it is total.
+4. **Pad the query count** to a class rather than revealing `n` exactly.
+5. **Round the requested height** to the epoch boundary, so the snapshot asked
+   for is not itself a distinguisher.
+
+Multiple bridges still help and compose with all of this — but as insurance
+against one operator correlating by timing, not as the primary defence.
+
+### What is still not measured
+
+The simulation gives the adversary the wallet's window and otherwise assumes
+uniform background traffic. Real traffic is diurnal, and a wallet querying at
+03:00 local hides in a much thinner crowd than the daily average implies. The
+figures here are therefore an **upper bound on safety**, and the honest version
+of the rule probably wants the trough rate rather than the mean.
+
+---
+
+## D40 — Per-note anonymity is 12,302. Per-wallet anonymity is 1.
+
+**Phase 6b, step 4.** Simulated over 100,000 wallets holding ten notes each
+(`crates/zutreexo-testkit/src/bin/wallet_privacy.rs`), against Orchard's real
+nullifier count.
+
+[D39](#d39--every-pool-reaches-the-target-and-no-per-pool-split-is-needed) closed
+the per-query question and recorded what it did not cover. This is that.
+
+A wallet holding `n` notes must query `n` buckets, so the bridge sees a **set**
+of bucket indices. That set is a property of the wallet, not of any note, and it
+is stable — nullifiers do not move between buckets.
+
+| bits | buckets | per-query *k* | wallets uniquely identified | wallet-level *k* | one session |
+|---|---|---|---|---|---|
+| 2 | 4 | 12,598,136 | 0.0% | 62,146 | 1.40 GB |
+| 4 | 16 | 3,149,534 | 14.2% | 3.3 | 734.4 MB |
+| 6 | 64 | 787,383 | 100.0% | 1.0 | 223.0 MB |
+| 8 | 256 | 196,845 | 100.0% | 1.0 | 59.0 MB |
+| 10 | 1,024 | 49,211 | 100.0% | 1.0 | 14.9 MB |
+| **12 — the operating point** | 4,096 | **12,302** | **100.0%** | **1.0** | 3.8 MB |
+
+**At the chosen operating point every simulated wallet is uniquely
+identifiable.** The per-note figure and the per-wallet figure are 12,302 and 1.
+
+Reaching a wallet-level anonymity set at all requires `b ≤ 4`, where a session
+costs **734 MB** against 3.8 MB — 193× — and even that buys a class of only 3.3.
+A meaningful 62,146 needs `b = 2` and **1.40 GB a session**. Widening the
+prefix does not trade gracefully; it falls off a cliff.
+
+### What this is and is not
+
+It is **linkability, not disclosure**. The bridge learns a stable pseudonym for
+the wallet and how many notes it holds. It does not learn which notes: each
+individual query still hides its note among 12,302, and that part of
+[D38](#d38--12288-member-anonymity-for-3849-kb-from-a-sorted-snapshot-the-imt-never-sees)
+stands unchanged.
+
+Against the status quo that is still an improvement — asking a bridge for a
+named nullifier reveals the exact note *and* links the wallet, so this removes
+the disclosure and keeps the linkage. It is not the unlinkability the framing in
+D37 and D38 implied, and those numbers should be read with this attached.
+
+### Decoy buckets fail, for a different reason than decoy nullifiers
+
+[D35](#d35--privacy-the-headline-capability-cannot-be-delivered-privately-as-designed)
+killed decoy *nullifiers* by retrospective correlation: the real one appears
+on-chain when the note is spent and the decoys never do.
+
+Decoy **buckets** are not exposed that way — a bucket holds 12,302 genuine
+nullifiers belonging to other people, so no bucket is ever unmasked as fake.
+That looked promising. The attack that applies instead is **intersection across
+sessions**: fresh decoys each time, and the real buckets are the ones that
+recur.
+
+| decoys | buckets asked | sessions to isolate | cost per session |
+|---|---|---|---|
+| 0 | 10 | 1 | 3.8 MB |
+| 5 | 15 | 2 | 5.6 MB |
+| 10 | 20 | 2 | 7.5 MB |
+| 25 | 35 | 2 | 13.2 MB |
+| 50 | 60 | 3 | 22.6 MB |
+| 100 | 110 | 3 | 41.4 MB |
+
+**Ten times as many decoys buys two extra sessions.** A wallet checking spend
+status daily is fully isolated within three days, having paid 41.4 MB a session
+for the privilege. Decoys are defeated here as thoroughly as in D35, by an
+unrelated mechanism — worth recording, because the reason D35 gives does not
+apply and it would be easy to conclude decoys therefore work.
+
+### The one mitigation that survives
+
+Give no single bridge the whole fingerprint.
+
+| buckets per bridge | wallets uniquely identified | wallet-level *k* | bridges for 10 notes |
+|---|---|---|---|
+| **1** | **0.0%** | **25.4** | **10** |
+| 2 | 98.7% | 1.0 | 5 |
+| 3 | 100.0% | 1.0 | 4 |
+| 5 | 100.0% | 1.0 | 2 |
+
+The cliff is between one bucket and two. At one bucket per bridge nothing is
+distinguishable; at two, 98.7% of wallets already are.
+
+> **Corrected 2026-08-31 — "one bridge per note" is stronger than what this
+> shows.** The bridge being *distinct* is not what does the work; the sessions
+> being **unlinkable** is. One bridge receiving ten single-bucket queries it
+> cannot join holds ten independent observations, which is anonymity-equivalent
+> to ten bridges. The fingerprint measured above exists because `n` buckets
+> arrive together in one identifiable session.
+>
+> So the requirement is **one unlinkable session per bucket**, not one operator
+> per note — a far weaker assumption, and one Tor already meets.
+> [D41](#d41--unlinkable-sessions-work-but-only-above-a-user-base-and-never-in-a-burst)
+> measures whether a bridge can re-join those sessions anyway, and what the
+> deployment has to look like for it to hold.
+
+The 25.4 is bounded by the 100,000-wallet simulation — it is
+`population / buckets` and would rise with a real population. The shape is what
+matters: identifiability arrives almost immediately as buckets accumulate.
+
+### Where this leaves Phase 6b
+
+**Delivered:** a private-per-note spend-status query at 384.9 KB for a
+12,302-member anonymity set, on any pool, with no change to any frozen format.
+That is real and it is new.
+
+**Not delivered:** wallet unlinkability. Bandwidth cannot buy it, decoys cannot
+buy it, and the only thing that can is a bridge-per-note deployment assumption.
+
+**Phase 7's gate is unchanged and still shut.** CLAUDE.md requires the privacy
+review be clean; it is cleaner than D35 left it and it is not clean.
+
+---
+
+## D39 — Every pool reaches the target, and no per-pool split is needed
+
+**Phase 6b, step 3.** Measured against each pool's real nullifier count
+(`crates/zutreexo-testkit/src/bin/pool_cohorts.rs`), at the chosen target of
+`k = 12,298`.
+
+| pool | nullifiers | bits | members | cohort | whole set | serve |
+|---|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 12 | 12,278 | **384.6 KB** | 1,537.86 MB | cohort |
+| Sapling | 2,129,852 | 7 | 16,619 | **520.2 KB** | 65.00 MB | cohort |
+| Sprout | 1,547,198 | 6 | 24,125 | **754.7 KB** | 47.22 MB | cohort |
+| **Ironwood** | **70,380** | **2** | **17,591** | **550.3 KB** | 2.15 MB | **cohort** |
+
+**Every pool serves the target with a cohort, and every cohort beats shipping
+the whole set — Ironwood's by 4×.** The split
+[D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+predicted is not needed. One rule covers all four: **pick the widest prefix
+whose expected cohort still reaches the target.**
+
+### Why D37 got this wrong
+
+D37 wrote:
+
+> At 16 bits an Ironwood query names a single note. Reaching `k ≈ 760` there
+> means a prefix so wide it pulls 1.1% of the pool — and the entire Ironwood
+> nullifier set is only 2.25 MB, so shipping the whole thing is competitive with
+> any cohort large enough to hide in.
+
+Both facts are true and the conclusion does not follow. That reasoning **fixed
+the prefix width and asked what anonymity fell out**, which is backwards: the
+target is the anonymity, and the prefix is what you solve for. A pool with few
+nullifiers does not need a narrow prefix, it needs a *wide* one — and a wide
+prefix over a small pool is cheap precisely because the pool is small.
+
+Ironwood at 2 bits pulls a quarter of the pool and that quarter is 17,591
+members, which **exceeds** the target Orchard meets at 12 bits. The small pool
+is not the hard case; it was only made to look like one by holding `b` fixed at
+a value chosen for a pool 716× larger.
+
+### Cost tracks the target, not the pool
+
+The four cohorts cost 384.6 KB, 520.2 KB, 754.7 KB and 550.3 KB — a 2× spread
+across pools spanning **716×** in size. Per member they are 31.3 B, 32.0 B,
+32.0 B and 32.0 B.
+
+That is the sorted layout's property stated at the level that matters for
+operations: **the wire cost of a private query is set by how much anonymity you
+ask for, and is very nearly independent of which pool you ask about.** A bridge
+sizing its rate limiter and its response cap needs one number, not four. The
+spread that remains is only the difference between the target and the next
+power of two above it.
+
+### The fallback still exists and stays cheap
+
+`widest_prefix` returns zero when even a one-bit prefix would fall below the
+target — for a pool holding fewer than `2 × target` nullifiers, no prefix can
+hide a note among enough others, and the whole set is the only honest answer.
+For a pool that small the whole set is trivial: at the target, the boundary is
+24,596 nullifiers, or 787 KB. Tested rather than assumed, including the
+`n == target` and zero-target edges.
+
+This matters because Ironwood was 70,380 nullifiers at measurement and a **new
+pool activates with none**. The rule degrades correctly: whole set while tiny,
+then cohorts once there is a crowd to hide in.
+
+### What this does not settle
+
+**Intersection across a wallet's own notes.** Each query reveals one bucket.
+A wallet holding ten notes and querying all of them reveals ten buckets, and
+that *set* is more identifying than any single member of it — at Orchard's 4,096
+buckets, ten draws is a fairly distinctive fingerprint, even though each draw
+individually hides among 12,278. The measurement here is per-query anonymity and
+says nothing about the correlation across a wallet's queries. Mitigations exist
+in principle — query padding, reusing one wide bucket for several notes, spacing
+requests — and none is measured. **This is the open privacy question now**, and
+it is a different shape from the one D35 raised.
+
+---
+
+## D38 — 12,288-member anonymity for 384.9 KB, from a sorted snapshot the IMT never sees
+
+**Phase 6b, step 2.** Measured at Orchard's real 50,392,547 nullifiers
+(`crates/zutreexo-testkit/src/bin/cohort_cost.rs`). **Target chosen: k = 12,298**
+— [D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+priced that at **5.35 MB** per query, which was judged too much.
+
+| prefix | members | siblings | **sorted** | IMT cohort | saving | B/member |
+|---|---|---|---|---|---|---|
+| 8 bits | 196,689 | 24.9 | 6.00 MB | 59.48 MB | 9.9× | 32 B |
+| **12 bits** | **12,288** | **25.2** | **384.9 KB** | 5.35 MB | **14.2×** | **32 B** |
+| 16 bits | 777 | 26.6 | 25.2 KB | 453.6 KB | 18.0× | 33 B |
+| 20 bits | 51 | 26.4 | 2.6 KB | 36.4 KB | 14.2× | 51 B |
+| 24 bits | 4.5 | 26.0 | 1.1 KB | 3.1 KB | 2.8× | 250 B |
+
+**The target costs 384.9 KB** — less than a 768-member cohort cost before. The
+projection going in was ~395 KB; measured 384.9 KB, within 3%.
+
+The `siblings` column is the whole argument. It sits at ~25 whatever the cohort
+size, because a value range in a sorted tree is one **contiguous run** and its
+proof is the fringe of the covering subtrees: at most two per level, `O(log n)`.
+Cost per member collapses to the value itself, 32 bytes, against ~585 B in the
+IMT layout after deduplication.
+
+### Why this is not "reorder the IMT"
+
+Insertion order is not an accident. Appending to an indexed Merkle tree is
+`O(1)` and touches one path; inserting into the middle of a value-ordered tree
+of 50.4M leaves shifts about 25M of them, each a path update. That trade is what
+IMTs exist to make, and taking it back per block would be ruinous. An earlier
+note here described step 2 as "the value-ordered layout" without saying so,
+which understated the problem.
+
+What makes a sorted tree affordable is that **nullifier sets are append-only**.
+Nothing is ever removed, so a sorted snapshot stays correct for everything it
+contains, permanently — it can only become *incomplete*, never wrong. So it is
+rebuilt in bulk once an epoch. Measured: **16.8 s** to sort and hash 50.4M
+values into a depth-26 tree, against an epoch measured in hours.
+
+**The consequence for the frozen format is that there isn't one.** The IMT is
+untouched, its on-disk layout is untouched, no version bump, no migration. The
+sorted tree is derived, additive, bridge-side state, and consensus-neutral like
+everything before Phase 7. An earlier note said step 2 "touches a Phase 3-frozen
+structure"; under this design it does not, and the risk is much lower than that
+implied.
+
+### The gap between epochs is public data
+
+A snapshot at height H cannot know about nullifiers revealed after H. Those are
+**published on-chain**, so a wallet following the chain already holds them and
+needs no accumulator proof for them — the private query covers the 50.4M-member
+history, and the recent tail is public either way. This is tested:
+`sorted_differential.rs` asserts that a value revealed after the snapshot reads
+as unspent against it while the live IMT knows better, which is correct for that
+height and is exactly why the delta must be consulted.
+
+### The omission attack disappears
+
+[D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+records that a bridge can drop an in-range leaf from an IMT cohort, recompute
+the deduplication, and produce a valid Merkle proof of a smaller set —
+detectable only by consulting the linked list in `resolve`.
+
+Here it is **structural**. Members occupy consecutive positions and the proof
+commits to those positions, so a hole cannot be papered over. Completeness is
+checked directly: the run must begin below `range.lo` and continue to at or
+above `range.hi`, or to the last occupied leaf.
+
+That second half needed a fix the tests caught. The prover originally ended the
+run at the last in-range value, and a verifier shown a run ending at some
+`v < hi` cannot tell whether `v` is genuinely the largest in the range or
+whether the bridge stopped early. The run now includes the first value **at or
+above** `hi` as an upper witness — 32 bytes, and it turns completeness from an
+argument into a check.
+
+### Correctness
+
+`sorted_differential.rs` settles every probe three ways — the IMT directly, an
+IMT cohort, and a sorted cohort **through the wire** — and requires all three to
+agree. Two structures over one set is exactly where a silent disagreement lives:
+both self-consistent, both verifying, one wrong. The test also asserts it saw
+both verdicts, since a differential run that only ever saw "unspent" has proven
+nothing about "spent". Confirmed to fail on an injected off-by-one in the
+bracket.
+
+Domain separation is a distinct family, `ZSortNul‖pool‖role`, not a new role
+under `ZNullIMT`. The two trees hold the same values for the same pool, so
+sharing a separator would let a leaf digest from one be presented as a node
+digest from the other — CLAUDE.md §5 rule 4 for precisely this case.
+
+The decoder got its bit-flip and truncation sweep at the time it was written.
+It has the largest allocation lever of any decoder in the project: at the target
+width a legitimate cohort is 12,288 values, and a declared `u32::MAX` asks for
+**137 GB**. Confirmed by removing the guard — `memory allocation of
+137438953440 bytes failed`, SIGABRT.
+
+### What is decided and what is not
+
+**Decided:** the target is affordable. 12,288-member anonymity costs 384.9 KB,
+14.2× better than the IMT cohort, with no change to any frozen format.
+
+**Not decided:** how the bridge serves and retains snapshots (epoch length,
+how many to keep, what a wallet does across an epoch boundary), and the per-pool
+split — [D37](#d37--a-private-spend-status-query-costs-4497-kb-and-the-published-proof-size-was-measured-on-the-wrong-tree)
+shows Ironwood's 70,380 nullifiers give a 1.07-member cohort at 16 bits, and its
+whole set is 2.25 MB, so small pools likely want whole-set download instead.
+
+---
+
 ## D37 — A private spend-status query costs 449.7 KB, and the published proof size was measured on the wrong tree
 
 **Phase 6b.** Measured against a depth-40 IMT holding Orchard's real nullifier

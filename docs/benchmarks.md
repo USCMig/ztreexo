@@ -990,24 +990,118 @@ per-node level and index fields cost more than the sparse path's bitmap, so the
 "dedup" column goes negative. The cohort is a tool for large anonymity sets and
 should not be used where the set is one.
 
-### Per-pool anonymity is the binding constraint
+### The sorted snapshot, 2026-08-28
 
-Prefix width has to be chosen per pool, and the pools span three orders of
-magnitude:
+`docs/design.md` D38. Same tree, same questions, leaves stored in **value**
+order in a derived epoch snapshot rather than insertion order in the IMT.
 
-| pool | nullifiers | cohort at *b* = 16 |
-|---|---|---|
-| Orchard | 50,392,547 | 769 |
-| Sapling | 2,129,852 | 32 |
-| Sprout | 1,547,198 | 24 |
-| **Ironwood** | **70,380** | **1.07** |
+| prefix | members | siblings | **sorted** | IMT cohort | saving | B/member |
+|---|---|---|---|---|---|---|
+| 8 bits | 196,689 | 24.9 | 6.00 MB | 59.48 MB | 9.9× | 32 B |
+| **12 bits** | **12,288** | **25.2** | **384.9 KB** | 5.35 MB | **14.2×** | **32 B** |
+| 16 bits | 777 | 26.6 | 25.2 KB | 453.6 KB | 18.0× | 33 B |
+| 20 bits | 51 | 26.4 | 2.6 KB | 36.4 KB | 14.2× | 51 B |
+| 24 bits | 4.5 | 26.0 | 1.1 KB | 3.1 KB | 2.8× | 250 B |
 
-At 16 bits an Ironwood query names a single note. Reaching `k ≈ 760` there needs
-a prefix wide enough to pull 1.1% of the pool, and the entire Ironwood nullifier
-set is only 2.25 MB — so downloading the whole thing is competitive with any
-cohort large enough to hide in. The likely shape of a real answer is a **split
-by pool size**, and Ironwood is not transitional: CLAUDE.md §7 records that it
-and Orchard both stay live indefinitely.
+**12 bits is the chosen operating point: a 12,288-member anonymity set for
+384.9 KB**, less than a 768-member cohort cost under the IMT layout.
+
+The `siblings` column carries the result. It stays at ~25 whatever the cohort
+holds, because a value range is a contiguous run in a sorted tree and its proof
+is the fringe of the covering subtrees — at most two per level. Payload is
+`O(k)` at 32 bytes a member; proof is `O(log n)` and flat.
+
+Snapshot build: **16.8 s** for 50.4M values into a depth-26 tree, 24.7 GB peak
+for the whole measurement including the IMT alongside it. That is an epoch
+rebuild against an epoch measured in hours.
+
+Above 20 bits the sorted form loses its advantage and at 24 bits it is barely
+better than a plain proof — at `k ≈ 1` the fixed header and fringe dominate.
+Both cohort forms are tools for large anonymity sets.
+
+### Unlinkable sessions and the user base, 2026-08-31
+
+`docs/design.md` D41. Days until an adversary recovers a wallet's bucket set by
+intersecting the buckets seen in its active window, given one bucket per
+unlinkable session. The adversary is told when the wallet is active.
+
+| wallets | 1 second | 1 minute | 15 minutes | 1 hour | 6 hours | 1 day |
+|---|---|---|---|---|---|---|
+| 1,000 | 1 | 2 | 3 | 4 | 11 | 97 |
+| 10,000 | 2 | 3 | 6 | 20 | safe | safe |
+| 100,000 | 2 | 5 | 106 | safe | safe | safe |
+| 1,000,000 | 3 | 44 | safe | safe | safe | safe |
+
+**A burst always loses** — ten queries in one second are recovered within three
+days at every population, a million wallets included. Fresh circuits do not
+help when the queries are simultaneous.
+
+Crowd per bucket, the anonymity set of one unlinkable query: **2** at 1,000
+wallets, 24 at 10,000, 244 at 100,000, 2,439 at 1,000,000. A 1,000-user bridge
+protects nobody.
+
+The rule, which reproduces the sweep at every population:
+
+```text
+spread ≥ 10 × buckets × 86400 / (wallets × notes)   seconds
+```
+
+— 6 minutes at a million wallets, 59 minutes at a hundred thousand, 9.8 hours at
+ten thousand, and more than a day at a thousand, which is to say no safe setting
+exists there.
+
+### Wallet-level anonymity, 2026-08-29
+
+`docs/design.md` D40. 100,000 simulated wallets, ten notes each, Orchard.
+
+| bits | per-query *k* | wallets uniquely identified | wallet-level *k* | one session |
+|---|---|---|---|---|
+| 2 | 12,598,136 | 0.0% | 62,146 | 1.40 GB |
+| 4 | 3,149,534 | 14.2% | 3.3 | 734.4 MB |
+| 6 | 787,383 | 100.0% | 1.0 | 223.0 MB |
+| **12 — operating point** | **12,302** | **100.0%** | **1.0** | **3.8 MB** |
+
+**At the operating point every simulated wallet is uniquely identifiable.** The
+per-note anonymity set is 12,302 and the per-wallet one is 1. Buying a wallet
+anonymity set needs `b ≤ 4` and 734 MB a session, 193× the operating point, for
+a class of 3.3.
+
+Decoy buckets are stripped by intersection across sessions — 100 decoys at
+41.4 MB a session delay isolation to three sessions, against one with no decoys.
+Splitting queries across bridges works only at **one bucket per bridge**: at two
+buckets 98.7% of wallets are already unique.
+
+This is linkability rather than disclosure — the bridge learns a stable
+pseudonym and a note count, not which notes — and the per-note figures below are
+unaffected. They should be read with it attached.
+
+### Per pool, at the target — measured 2026-08-28
+
+`docs/design.md` D39. Each pool at its real nullifier count, with the prefix
+chosen as the widest that still reaches `k = 12,298`.
+
+| pool | nullifiers | bits | members | cohort | whole set | serve |
+|---|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 12 | 12,278 | **384.6 KB** | 1,537.86 MB | cohort |
+| Sapling | 2,129,852 | 7 | 16,619 | **520.2 KB** | 65.00 MB | cohort |
+| Sprout | 1,547,198 | 6 | 24,125 | **754.7 KB** | 47.22 MB | cohort |
+| Ironwood | 70,380 | 2 | 17,591 | **550.3 KB** | 2.15 MB | cohort |
+
+**Every pool reaches the target and every cohort beats the whole set** —
+Ironwood's by 4×. Whole run: 21.8 s, 5.8 GB peak, Orchard accounting for nearly
+all of both.
+
+Cost per member is 31.3 / 32.0 / 32.0 / 32.0 bytes. Across pools spanning 716×
+in size the cohorts differ by 2×, and that residue is only the gap between the
+target and the next power of two. **Wire cost is set by the anonymity asked
+for, not by which pool is asked about** — which is the number a bridge needs
+for its response cap and rate limiter.
+
+An earlier note here predicted a split by pool size, on the arithmetic that a
+16-bit prefix names a single Ironwood note. True, and beside the point: that
+fixes the prefix and reads off the anonymity, where the target is the anonymity
+and the prefix is what you solve for. A small pool takes a *wider* prefix, and a
+wide prefix over a small pool is cheap. Superseded by the table above.
 
 ---
 

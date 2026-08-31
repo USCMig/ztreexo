@@ -101,10 +101,34 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
         "lines": 97.2,
         "min_branches": 44,  # measured 46/56
     },
+    # The sorted cohort tree (D38). Gated on its own for the same reason as
+    # `cohort.rs`: it decodes bridge-supplied bytes, and it is a *second*
+    # structure over the same nullifier set, which is where a silent
+    # disagreement would live.
+    #
+    # 35 of 40 branches. The uncovered sides are `depth_for`'s overflow guard --
+    # unreachable without a Vec of more than 2^32 values -- and the pad
+    # fallbacks in the fold, which fire only for a tree shallower than any this
+    # builds. Kept for the reason CLAUDE.md's amended Phase 1 DoD gives: a guard
+    # that fails loudly beats a number.
+    "crates/zutreexo-accumulator/src/sorted.rs": {
+        "regions": 98.0,
+        "lines": 97.8,
+        "min_branches": 33,  # measured 35/40
+    },
     # Deserialization runs on attacker-supplied bytes, so it gets its own floor
     # rather than hiding inside the workspace average.
+    #
+    # Lowered 98.7 -> 98.6 on 2026-08-28, with the reason enumerated rather
+    # than the number simply moved. The sorted-cohort codec (D38) added ~200
+    # regions, one of which is provably dead: `reader.hash()?` inside the value
+    # loop. The count guard establishes `remaining >= 32 * value_count` before
+    # the loop, each iteration consumes exactly 32, so the read cannot fail --
+    # yet dropping the `?` would mean an unchecked read, which is worse than an
+    # uncovered one. Same trade CLAUDE.md's amended Phase 1 DoD makes for
+    # `imt.rs`: a guard that cannot fire beats a number.
     "crates/zutreexo-accumulator/src/proof.rs": {
-        "regions": 98.7,
+        "regions": 98.6,
         "lines": 99.6,
         "min_branches": 26,  # measured 29/32
     },
@@ -240,6 +264,29 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "minutes; reporting only, it computes no state the workspace "
             "depends on. The construction it measures is covered by "
             "zutreexo-accumulator's cohort tests."
+        ),
+    },
+    "crates/zutreexo-testkit/src/bin/pool_cohorts.rs": {
+        "never_measured": (
+            "operational entry point — builds a sorted tree per pool at real "
+            "mainnet nullifier counts to answer whether every pool reaches the "
+            "anonymity target (D39). 5.8 GB; reporting only. Its one piece of "
+            "logic, `widest_prefix`, has unit tests inside the binary."
+        ),
+    },
+    "crates/zutreexo-testkit/src/bin/wallet_privacy.rs": {
+        "never_measured": (
+            "operational entry point — simulates a wallet population to measure "
+            "how identifying a wallet's bucket set is (D40). Reporting only; its "
+            "logic has unit tests inside the binary."
+        ),
+    },
+    "crates/zutreexo-testkit/src/bin/session_privacy.rs": {
+        "never_measured": (
+            "operational entry point — simulates the timing-intersection attack "
+            "against unlinkable single-bucket sessions to find the required "
+            "query spread and the minimum viable user base (D41). Reporting "
+            "only; its logic has unit tests inside the binary."
         ),
     },
     # Phase 5b's shadow runner. Same category again, and more so than the
