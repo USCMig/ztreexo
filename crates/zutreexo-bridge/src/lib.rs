@@ -41,14 +41,36 @@
 //! a *specific* nullifier's proof tells the bridge which note is about to be
 //! spent.
 //!
-//! [`Request::PrefixCohort`] is the answer to that, and it is a partial one.
-//! It replaces "which note" with "which of ~12,298 notes", which
-//! `docs/design.md` D40 measured as per-*note* anonymity of 12,302 and
-//! per-*wallet* anonymity of **1** — a wallet's set of buckets fingerprints it
-//! even though no single bucket does. D41 gives the condition under which
-//! spreading the queries across unlinkable sessions recovers it. Neither the
-//! fingerprint nor the spreading rule is enforced here: this crate serves the
-//! query, and how a client spaces its queries is the client's problem.
+//! [`Request::PrefixCohort`] is a partial answer to that. It replaces "which
+//! note" with "which of ~12,298 notes", which `docs/design.md` D40 measured as
+//! per-*note* anonymity of 12,302 and per-*wallet* anonymity of **1** — a
+//! wallet's set of buckets fingerprints it even though no single bucket does.
+//! D41 gives the condition under which spreading the queries across unlinkable
+//! sessions recovers it. Neither the fingerprint nor the spreading rule is
+//! enforced here: this crate serves the query, and how a client spaces its
+//! queries is the client's problem.
+//!
+//! # Read this before reaching for the cohort as a privacy mechanism
+//!
+//! **It is not the best available answer for a light client, and D44 says so
+//! with numbers.** `valargroup/spendability-pir` partitions the nullifier set
+//! the same way and hides the bucket index with SimplePIR instead of with crowd
+//! size, so D40's fingerprint does not arise at all — for 1.78x the bandwidth,
+//! in deployed code.
+//!
+//! What this crate offers that PIR does not, and the only grounds on which to
+//! choose it:
+//!
+//! * **Full history.** Their coverage is a ~289-day sliding window. This serves
+//!   the set from genesis.
+//! * **A proof, not an answer.** A cohort folds to a root the client can
+//!   cross-check across bridges ([`Roots`]). A PIR response is the server's
+//!   word.
+//! * **Non-membership a third party can check**, which is what a validator
+//!   needs and a hash table cannot give.
+//!
+//! Choosing this for the light-client spend-status query, on the strength of
+//! the anonymity figure alone, would be the wrong call.
 
 pub mod epoch;
 pub mod limits;

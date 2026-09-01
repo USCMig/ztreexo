@@ -2,10 +2,11 @@
 //!
 //! # Why a snapshot at all
 //!
-//! The live nullifier structure is an [`IndexedMerkleTree`], and its leaves sit
+//! The live nullifier structure is an
+//! [`IndexedMerkleTree`](zutreexo_accumulator::imt::IndexedMerkleTree), and its leaves sit
 //! in **insertion** order. A prefix cohort needs the opposite — every value in
 //! a value-range as one contiguous run — which is what
-//! [`SortedTree`](zutreexo_accumulator::sorted::SortedTree) provides, and why
+//! [`SortedTree`] provides, and why
 //! `docs/design.md` D38 measured it at 14.2x the IMT cohort's efficiency.
 //!
 //! A sorted tree cannot be maintained incrementally the way the IMT is: a

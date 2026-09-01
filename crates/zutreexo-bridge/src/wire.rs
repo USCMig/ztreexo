@@ -83,7 +83,10 @@ pub enum Request {
     ///
     /// `docs/design.md` D40 is the limit on what that buys: the crowd is
     /// 12,302 per note but 1 per *wallet*, because a wallet's set of buckets
-    /// fingerprints it. D41 gives the spreading rule that recovers it.
+    /// fingerprints it. D41 gives the spreading rule that recovers it, and D44
+    /// records that deployed PIR avoids the fingerprint entirely for 1.78x the
+    /// bandwidth — so prefer this method for full-history or *provable*
+    /// answers, not for light-client privacy. See the crate docs.
     PrefixCohort {
         /// Which pool's snapshot.
         pool: PoolId,
