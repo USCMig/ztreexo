@@ -65,3 +65,6 @@ personal/
 # machine-specific and 1.7 MB, and it was committed once by accident.
 /coverage.json
 /coverage-ci.json
+
+# Node PID files dropped in the repo root by local devnet scripts.
+*.pid

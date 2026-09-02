@@ -281,6 +281,15 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
             "logic has unit tests inside the binary."
         ),
     },
+    "crates/zutreexo-testkit/src/bin/epoch_cost.rs": {
+        "never_measured": (
+            "operational entry point — prices a bridge's epoch policy: snapshot "
+            "build time and resident bytes per pool, and the interval trade "
+            "between the bridge's rebuild duty cycle and the client's delta "
+            "scan (D43). Reporting only; the byte model it reports from is "
+            "asserted against a real tree by unit tests inside the binary."
+        ),
+    },
     "crates/zutreexo-testkit/src/bin/session_privacy.rs": {
         "never_measured": (
             "operational entry point — simulates the timing-intersection attack "
@@ -342,9 +351,34 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # phase did not build. What is covered is every path a peer can reach by
     # sending bytes.
     "crates/zutreexo-bridge/src/wire.rs": {
+        "regions": 96.5,
+        "lines": 99.4,
+        "min_branches": 15,  # measured 17/18
+    },
+    # Phase 6c's epoch store: the snapshot schedule, the retention rule, and the
+    # prefix floor the server enforces (D42, D43). Gated on its own because the
+    # floor is a *privacy* control — a bug that widened it would serve smaller
+    # anonymity sets than advertised while every test stayed green, which is the
+    # failure mode with no symptom.
+    #
+    # 20 of 22 branches. The uncovered sides are the `continue` for a pool with
+    # no tree (`ChainAccumulators::new` always creates all four, and there is no
+    # public way to remove one) and the empty-range guard in `evict`, which
+    # cannot fire because eviction only runs when the range holds more than
+    # `keep >= 1`. Kept for the reason CLAUDE.md's amended Phase 1 DoD gives.
+    "crates/zutreexo-bridge/src/epoch.rs": {
+        "regions": 98.9,
+        "lines": 99.0,
+        "min_branches": 18,  # measured 20/22
+    },
+    # The connection limits, including Phase 6c's per-peer cohort byte budget.
+    # Previously folded into the workspace average; given its own floor now that
+    # it carries a second token bucket whose whole job is to refuse traffic the
+    # request counter waves through.
+    "crates/zutreexo-bridge/src/limits.rs": {
         "regions": 96.3,
-        "lines": 91.3,
-        "min_branches": 6,  # measured 8/8
+        "lines": 95.8,
+        "min_branches": 14,  # measured 16/20
     },
     # Phase 6 raised regions and lowered lines here, and both moved for the same
     # reason: the hardening in D34 added code whose *happy* paths are all tested
@@ -358,15 +392,38 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
     # Lines lowered 92.5 -> 91.9 (measured 91.98): a deliberate reduction,
     # declared here in the same change per this file's own rule rather than
     # worked around.
+    #
+    # Phase 6c lowered both again — regions 89.5 -> 89.1 (measured 89.15), lines
+    # 91.9 -> 91.2 (measured 91.29) — and raised the branch floor sharply,
+    # 13 -> 27 (measured 30/34, up from 22/24). Both movements have the same
+    # cause and it is worth stating plainly rather than letting the region
+    # number stand alone:
+    #
+    # The cohort service added two request handlers whose *reachable* paths are
+    # all tested — the manifest, a served cohort, `NO_SUCH_EPOCH`,
+    # `PREFIX_TOO_NARROW`, `BUDGET_EXHAUSTED`, and every refusal a peer can
+    # provoke by sending bytes. What it also added is one `status::INTERNAL` arm
+    # per handler, for an accumulator that fails on state the bridge itself
+    # built, and a `_ => BAD_REQUEST` arm the decoder makes unreachable (the
+    # prefix range is validated during decode, so the handler's re-derivation
+    # cannot fail). Those are guards, not paths, and the branch count going from
+    # 22/24 to 30/34 is the better description of what the new tests bought.
     "crates/zutreexo-bridge/src/server.rs": {
-        "regions": 89.5,
-        "lines": 91.9,
-        "min_branches": 13,  # measured 22/24
+        "regions": 89.1,
+        "lines": 91.2,
+        "min_branches": 27,  # measured 30/34
     },
+    # Same shape, same phase, same reason: regions 86.9 -> 86.3 (measured 86.36),
+    # lines 88.7 -> 87.8 (measured 87.83), branches 4 -> 8 (measured 9/10, up
+    # from 4/4). The uncovered remainder is almost entirely the `map_err`
+    # closures that turn an accumulator failure into `BridgeError::Snapshot` or
+    # `BridgeError::Prove` — reachable only if `SortedTree::from_imt` or
+    # `prove_prefix_cohort` fails on a tree this crate constructed and holds,
+    # which nothing a peer sends can arrange.
     "crates/zutreexo-bridge/src/lib.rs": {
-        "regions": 86.9,
-        "lines": 88.7,
-        "min_branches": 4,  # measured 4/4
+        "regions": 86.3,
+        "lines": 87.8,
+        "min_branches": 8,  # measured 9/10
     },
 }
 
@@ -382,15 +439,21 @@ FILE_FLOORS: dict[str, dict[str, float]] = {
 # pointed upward rather than lowering it whenever new code lands slightly below
 # the mean.
 #
+# Ratcheted at Phase 6c (2026-08-31) to 94.8 / 94.4 / 87.3, measured
+# 94.87 / 94.42 / 87.62. Up on every axis from Phase 4b's 93.59 / 92.66 / 83.97,
+# and the branch figure by 3.65 points, for the same reason as before: the new
+# code is a decoder and a policy gate, and both were given adversarial tests
+# and a mutation pass rather than round-trip tests alone. Four of the thirteen
+# mutants run against Phase 6c survived the first attempt and named real gaps.
 WORKSPACE_FLOORS: dict[str, float] = {
-    "regions": 93.5,
-    "lines": 92.6,
+    "regions": 94.8,
+    "lines": 94.4,
     # Percentage, not a count: the workspace denominator grows as code is added,
     # so an absolute floor here would have to be edited on every commit. Set
     # 0.3 below the measurement rather than at the usual one-decimal truncation,
     # because this is the one workspace metric the jitter described below can
     # move, and a flaky gate gets switched off.
-    "branches": 83.6,
+    "branches": 87.3,
 }
 
 # ---------------------------------------------------------------------------

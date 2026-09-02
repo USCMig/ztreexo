@@ -1222,12 +1222,26 @@ is the watch-only spend-status query — the one Phase 5a measured at 317× to
 note has *already* been spent is by definition not about to publish that
 nullifier.
 
-**Private information retrieval.** Genuinely solves it, and destroys the
+**Private information retrieval.** Genuinely solves it. ~~And destroys the
 efficiency argument that motivates the design: single-server PIR costs the
 server work linear in the database per query. D34 measured a non-membership
-proof at 0.010 ms; a PIR query over 54.1M nullifiers is many orders above that.
-CLAUDE.md §7 already flags Tachyon's PIR work as possibly subsuming this
+proof at 0.010 ms; a PIR query over 54.1M nullifiers is many orders above
+that.~~ CLAUDE.md §7 already flags Tachyon's PIR work as possibly subsuming this
 project, and on this axis it does.
+
+> **Corrected 2026-09-01 — the struck sentence was wrong, and it mattered.**
+> The arithmetic is right for a PIR database holding the whole nullifier set.
+> `valargroup/spendability-pir` does not build that: it holds a **sliding
+> window of 1,000,000 nullifiers (~289 days)** in a bucketed hash table and
+> queries it with SimplePIR at a measured **65 ms**, 672 KB up and 12 KB down.
+> That is 1.78x the prefix cohort's bandwidth, not orders of magnitude, and it
+> leaks nothing where D40 measured the cohort's per-wallet anonymity at 1.
+>
+> This paragraph dismissed, on an assumption, the option it was most important
+> to price — and the design it dismissed was subsequently built, measured and
+> wired into wallets. **The prefix cohort sketched at the end of this entry is
+> dominated on the purpose it was sketched for.** Full comparison, and the
+> narrow set of claims that do survive, in D44.
 
 **Run your own bridge.** No leak, no saving — the wallet holds the full IMT. Fine
 for an operator who wants compact *validation*, which is the clean use case
@@ -1276,6 +1290,324 @@ Phase 7 does not change this. Committing accumulator roots on-chain fixes the
 *trust* caveat — the wallet would no longer need a bridge's word for the root —
 and does nothing about the leak, because the wallet must still ask someone for
 a proof.
+
+---
+
+## D44 — PIR for spendability exists, it is deployed, and it dominates the prefix cohort on the axis the cohort was built for
+
+**Reviewed 2026-09-01**, at the user's prompting, against three public sources:
+`zakura.com/announcements/zakura-1-3-0/`, `github.com/valargroup/spendability-pir`,
+and `github.com/distractedm1nd/p2p-spendability-pir` (a fork of the second,
+retargeted from Orchard to Ironwood and embedding a `zakurad` node). READMEs and
+design docs read in full; the code was not read.
+
+D35 dismissed private information retrieval on efficiency grounds and moved on.
+That dismissal was wrong, and the prefix cohort D37–D43 built on the back of it
+is dominated on its stated purpose. Recording that here rather than letting it
+be rediscovered.
+
+### First, what Zakura itself is not
+
+Zakura 1.3.0 is a **Zebra fork** — consensus-compatible, ~5x sync, native
+pruning, an 11 GB snapshot bootstrap, and the `common` crates (a renamed
+`librustzcash` fork) giving 4–8x zk-SNARK verification and 21x Sinsemilla.
+
+**It contains no PIR and no nullifier accumulator.** PIR appears exactly once in
+the release announcement, in the P2P *service discovery* section — a way for a
+node to advertise that it serves PIR, not an implementation. `CHANGELOG.md`
+greps to zero hits for `pir`, `nullifier`, `accumulator`, `utreexo`, and
+`non-membership`. Its only state-structure work (`verified-commitment-trees.md`,
+`historical-treestate-serving.md`) is about **note commitment trees**, which
+CLAUDE.md §2 puts out of scope — and its mechanism, sparse frontiers plus
+replay, independently confirms §2's third row.
+
+The PIR is in the two `spendability-pir` repositories, which are separate.
+
+### What they built, and why it is the same shape as ours
+
+A **bucketed hash table queried by SimplePIR**:
+
+* `hash_to_bucket(nf) = u32_le(nf[0..4]) % 16,384`
+* 16,384 buckets x 112 entries x 41 bytes = 4,592 B/bucket, ~72 MB total
+  (the Ironwood fork uses 32-byte entries: 3,584 B/bucket, 56 MiB)
+* client computes its bucket, retrieves the whole bucket, scans it locally
+
+That is structurally **our prefix cohort**. Same partition of the nullifier
+space, same whole-bucket retrieval, same local scan. Their capacity reasoning is
+ours too — 16,384 buckets over 1M nullifiers, mean occupancy 61, capacity 112,
+"tight binomial distribution" — which is `epoch::max_bits_for` arriving at the
+same place from the same argument.
+
+**The one difference is how the bucket index is hidden**, and it is the whole
+difference:
+
+| | spendability-pir | zutreexo cohort (D38) |
+|---|---|---|
+| bucket hidden by | SimplePIR — server learns nothing | not hidden; k-anonymity |
+| per-note anonymity | the whole database | 12,302 (D40) |
+| **per-wallet anonymity** | **the whole database** | **1** (D40) |
+| upload / download | 672 KB / 12 KB | ~40 B / 384.9 KB |
+| **total per note** | **~684 KB** | **~385 KB** |
+| query latency | 65 ms | not measured end to end |
+| coverage | last 1M nullifiers, ~289 days, one pool | full set from genesis, all four pools |
+| authenticity | **none** | Merkle path to a root |
+| server | ~205 MB, 2.3 s rebuild/block | 6.00 GB, 25.5 s rebuild/epoch (D43) |
+
+### The finding
+
+**PIR structurally solves the problem D40 proved we cannot.** D40 measured
+per-note anonymity at 12,302 and per-wallet anonymity at **1**, because a
+wallet's *set of buckets* fingerprints it even though no single bucket does.
+SimplePIR makes the bucket index invisible, so there is no bucket set to
+fingerprint. D41's spreading rule, the decoy analysis, the crowd-of-2 result at
+1,000 users — all of it answers a question PIR does not have.
+
+And it costs **1.78x our bandwidth**, not the orders of magnitude D35 asserted.
+
+### D35's efficiency argument was wrong, and how
+
+D35 said a PIR query "over 54.1M nullifiers is many orders above" a 0.010 ms
+proof. That is true of the database D35 imagined. **They did not build that
+database.** `TARGET_SIZE = 1,000,000` with whole-block eviction gives a
+289-day sliding window at the measured ~3,465 Orchard actions/day, and the
+measured query is **65 ms** — expensive, not prohibitive.
+
+D35 dismissed the option it was most important to price, by assuming a design
+choice the implementers declined to make. Corrected in place at D35.
+
+### What survives, stated narrowly
+
+1. **The tail past their window.** Their own doc: *"If a wallet hasn't synced in
+   over ~9 months, its notes' nullifiers may have been evicted — the wallet
+   falls back to normal scanning."* Phase 5a's headline was measured at a
+   **one-year gap**, which is outside their coverage. This is not a lucky
+   escape; it is the only region where a full-set IMT is the answer and a
+   sliding window is not.
+2. **Authenticity.** They have none, by choice. A hostile server answering "not
+   spent" yields a doomed transaction; "spent" hides a live note until scan
+   catches up. Neither loses funds — the chain arbitrates — but it is an
+   accepted trust surface. Ours carries a proof to a root a wallet can
+   cross-check across bridges. **Theirs is a hint; ours is a proof.** For a
+   Phase 7 consensus object that difference is the entire point.
+3. **The compact state node.** Untouched. Their server sits behind lightwalletd
+   behind a full node; nothing about node storage changes. Phases 3, 4 and 5b
+   are unaffected by any of this.
+4. **Non-membership as a primitive.** A hash table cannot prove absence to a
+   third party; it merely fails to contain the value. Useless to a validator.
+
+### What does not survive
+
+**The prefix cohort as "the private query".** D40 already conceded per-wallet
+anonymity of 1. PIR gets zero leakage for under twice the bytes, in deployed
+code, with a wallet-integration path across three repositories. Phase 6b and 6c
+built a real, tested, well-measured mechanism that is dominated on the purpose
+it was built for, and saying otherwise would be sunk cost.
+
+CLAUDE.md Phase 5 anticipated exactly this: *"honest numbers published,
+including the cases where this is worse than the status quo… that is a valid
+outcome."*
+
+The cohort keeps one defensible job — **the authenticated, full-history path**,
+for the beyond-window tail and for anything needing a proof rather than an
+answer. That is narrower than what D38–D43 claim for it, and PLAN.md is
+re-scoped to match.
+
+### Two things worth taking
+
+Their 9-byte entry tail (`spend_height`, `first_output_position`,
+`action_count`) lets a wallet locate change notes from the spending transaction
+without scanning. We return bare 32-byte values and have no equivalent.
+
+Their retention is whole-block eviction with slot zeroing and no compaction,
+rebuilt in 2.3 s at 72 MB. Ours rebuilds the world in 25.5 s at 6.00 GB (D43).
+Theirs is the better shape; ours is the price of being sorted, which is the
+price of the range proof.
+
+**What would change this.** A PIR construction whose database can hold the full
+set at tolerable cost would close the one gap in point 1 and leave only
+authenticity. Conversely, if the window turns out to be load-bearing for their
+server economics rather than incidental, the beyond-window case is durable
+rather than temporary — that is the question to ask them.
+
+**Caveat.** READMEs and design docs, not code. `valargroup`'s top-level README
+says ~56 MB where its own `nullifier/README.md` says ~72 MB (32- vs 41-byte
+entries); the detailed figure is used above.
+
+---
+
+## D43 — The epoch interval is bounded by the client; retention is bounded by 6 GB
+
+**Phase 6c, step 2.** Measured with
+`crates/zutreexo-testkit/src/bin/epoch_cost.rs`. Build times are extrapolated
+from a measured rate over slot count (`ZUTREEXO_EPOCH_FULL=1` measures them
+directly); resident bytes are computed exactly from the tree's depth and the
+formula is asserted against a real tree at every rung, so a wrong model shows
+up as a mismatch rather than as a plausible number.
+
+A `SortedTree` (D38) cannot be maintained incrementally: a nullifier lands in
+the middle of the value order and every leaf above it shifts. It is rebuilt
+whole, which makes it an **epoch snapshot**, which needs a policy — how often to
+rebuild, and how many to keep. Both knobs were guessed when the code was
+written. The measurement changed one of them.
+
+### Snapshot cost, per pool
+
+| pool | nullifiers | depth | build | keep=1 | keep=2 |
+|---|---|---|---|---|---|
+| Orchard | 50,392,547 | 26 | 23.24 s | **5.50 GB** | 11.00 GB |
+| Sapling | 2,129,852 | 22 | 1.45 s | 321.0 MB | 642.0 MB |
+| Sprout | 1,547,198 | 21 | 0.73 s | 175.2 MB | 350.4 MB |
+| Ironwood | 70,380 | 17 | 0.05 s | 10.1 MB | 20.3 MB |
+| **all four** | | | **25.5 s** | **6.00 GB** | **11.99 GB** |
+
+Measured build rate: 346.3 ns/value at 10⁷ values. Cost is dominated by hashing
+`2^depth` leaf slots rather than by the values themselves, so it **steps at each
+power of two** — 4,097 values cost what 8,192 cost, and nearly twice what 4,096
+cost. Extrapolation is therefore on slot count, not value count; a per-value fit
+would understate exactly the pools sitting just past a boundary.
+
+### The interval is not the bridge's problem
+
+| interval | wall clock | bridge duty cycle | client delta (mean) | client delta (worst) |
+|---|---|---|---|---|
+| 100 | 2.1 h | 0.34% | 14.5 KB | 28.9 KB |
+| 500 | 10.4 h | 0.07% | 72.4 KB | 144.8 KB |
+| **1,000** | **20.8 h** | **0.03%** | **144.8 KB** | **289.5 KB** |
+| 2,000 | 41.7 h | 0.02% | 289.5 KB | 579.0 KB |
+| 10,000 | 208.3 h | 0.00% | 1.4 MB | 2.8 MB |
+| 50,000 | 1041.7 h | 0.00% | 7.1 MB | 14.1 MB |
+
+**The bridge barely notices the interval.** Rebuilding all four pools is 25.5 s
+out of a 20.8-hour epoch. Nothing in that column argues for a longer interval.
+
+What bounds it is the **client delta**: a snapshot at height `H` answers as of
+`H`, and a wallet must scan `H+1..tip` itself for anything revealed since. At
+the 9.264 nullifiers/block measured in Phase 0, that is 289.5 KB worst case at
+an interval of 1,000, against the 384.9 KB cohort the wallet came for.
+
+**Break-even is 1,330 blocks (27.7 h).** Past that a wallet downloads more
+delta than cohort and the snapshot is carrying less than half its own weight.
+So the interval is 1,000 — just inside — and 2,000 is not defensible.
+
+The delta is *public chain data the wallet already has*, so this is a cost and
+not a correctness problem. It is still the client's cost, and the whole point of
+the cohort service is to move cost off the client.
+
+### Retention: the default was wrong, and the measurement is what said so
+
+`keep` was set to **2** on reasoning that sounds fine and is not: a client that
+fetches the manifest and then queries could be raced by a rebuild landing
+between the two calls, and a second retained epoch absorbs that.
+
+Priced, the trade is **6 GB against one extra round trip roughly once per 20.8
+hours per client**, on a race that resolves itself — the client sees
+`NO_SUCH_EPOCH`, refetches the manifest, retries. The default is now **1**.
+
+It is also the better privacy answer, which the original reasoning missed
+entirely. With several epochs live, *which* epoch a client picks is a second
+coordinate the bridge can group its queries on, on top of the bucket. D40 already
+showed that per-note anonymity does not survive being aggregated over a wallet's
+query set; handing the bridge another axis to aggregate on is the wrong
+direction. With one epoch there is no choice to make and nothing to distinguish.
+
+### Peak memory is twice the steady state, for 23 seconds
+
+`EpochStore::snapshot` inserts before it evicts, so a bridge at `keep = 1` still
+holds two Orchard trees — 11 GB — for the duration of the rebuild. Evicting
+first would halve the peak and leave the bridge with **no snapshot at all** for
+those 23 s, answering `NO_SUCH_EPOCH` to everyone. The transient allocation is
+the cheaper failure. It is recorded here because it has to be budgeted for
+rather than discovered on a 8 GB host.
+
+**What would change this.** NU7's possible 3× block-time change (CLAUDE.md §7)
+moves both columns at once: a third of the wall clock per interval, so a third
+of the delta, and three times the duty cycle — which is 0.03%, so the duty cycle
+does not begin to matter. The break-even in *blocks* is unaffected, because it
+is set by nullifiers per block against cohort size, and 3× faster blocks with
+the same transaction rate means fewer nullifiers per block, not more. A change
+in the *transaction* rate is what would move it, which is the reason CLAUDE.md
+§7 says to derive capacity from transactions rather than blocks.
+
+---
+
+## D42 — The bridge serves buckets, not nullifiers, and refuses to serve a narrow one
+
+**Phase 6c, step 1.** Before this, a wallet had exactly one way to ask a bridge
+whether its note was spent: `GetNullifierNonMembershipProof(pool, nullifier)` —
+which names the note, to the bridge, before the spend is public. D35 recorded
+that as the reason the Phase 5a headline is a measurement of a query a
+privacy-conscious wallet should not make. D37 and D38 built the alternative in
+the accumulator crate. **The bridge could not serve it**: the word "cohort"
+appeared nowhere in `zutreexo-bridge`, so nothing a wallet could actually run
+had changed.
+
+Two methods, `WIRE_VERSION` 1 → 2:
+
+| tag | request | body |
+|---|---|---|
+| 4 | `PrefixCohort { pool, epoch, bits, lo }` | `pool:1, epoch:4, bits:1, lo:32` |
+| 5 | `EpochManifest` | empty |
+
+The privacy property is in what the request **does not** contain. The client
+derives its bucket locally with `PrefixRange::covering`, sends the bucket,
+receives every nullifier in it, and settles membership itself with
+`sorted::resolve`. `cohort_service.rs` asserts this on the encoded bytes rather
+than arguing it from the type — and asserts the contrast, that the method it
+replaces *does* carry the value, so the check is testing something the old path
+would have failed.
+
+### The floor is refused, not widened, and it is published
+
+A wallet asking at 24 bits over Orchard names about three notes. The bridge
+refuses with `PREFIX_TOO_NARROW` rather than quietly widening the range.
+Widening is the tempting option and it is wrong twice over: the wallet would
+receive a proof for a range it did not ask about and has no reason to re-check,
+and the policy would be invisible to the only party whose privacy it protects.
+
+`max_bits` is therefore published per epoch in the manifest. A client that
+learns the floor *by being refused* has already told the bridge the narrow
+bucket it wanted, which is most of what the floor exists to prevent. Publishing
+it means the first cohort request a wallet ever sends is already wide enough.
+
+The floor is D39's arithmetic — `floor(log2(n / k))` at `k = 12,298` — moved out
+of the `pool_cohorts` reporting binary and into the library, because the server
+has to *enforce* it and not merely report it. A unit test pins it against the
+same four per-pool widths D39 published, so the bridge and the measurement
+cannot drift apart.
+
+**A pool holding fewer than `2k` nullifiers gets `max_bits = 0` and no cohort
+service at all**, because no split of it can put a wallet in a crowd of 12,298.
+The honest answer there is the whole nullifier set — 2.25 MB for Ironwood, cheap
+precisely because the pool is small. **That fallback is not built.** All four
+live pools clear the floor at the counts in `docs/benchmarks.md`, so nothing
+needs it today; a newly activated pool would.
+
+### A cohort is 385 KB, so counting requests stopped being a bandwidth control
+
+Every other response this server sends is small enough that
+`requests_per_minute` bounded bandwidth as a side effect. A cohort is 384.9 KB,
+so a peer sitting politely inside the default 600 requests a minute pulls
+**231 MB/min** from a single-threaded bridge on a link it does not pay for.
+
+`Limits` gains `cohort_bytes_per_minute` — a second token bucket, per peer,
+defaulting to 64 MiB — charged on actual serialised bytes and only on cohorts.
+Charging on refusals would let one over-budget request lock a peer out of the
+cheap methods, including the manifest that tells it when to come back. The two
+buckets share one map entry, so `max_tracked_peers` still means what it says.
+
+Charging *after* serialisation means the bridge pays the CPU and saves the
+bandwidth. That is the right way round: bandwidth is what a cohort actually
+consumes, and the CPU is already bounded by the request counter. A budget
+cannot refuse work whose size it does not yet know without guessing, and a
+guess that ran low would refuse honest clients.
+
+### What this does not fix
+
+D40 stands unchanged: this buys per-*note* anonymity of 12,302 and per-*wallet*
+anonymity of **1**. Nothing here enforces D41's spreading rule; the crate serves
+the query, and how a client spaces its queries is the client's problem. Saying
+otherwise would be the more dangerous error, because a wallet author reading
+"the bridge protects your privacy" would stop reading there.
 
 ---
 
@@ -2247,11 +2579,17 @@ fails rather than passing quietly.
 
 These are CLAUDE.md §7 items that Phase 1 could not resolve, carried forward.
 
-* **Does Tachyon's PIR work subsume this?** Unresolved, and it remains the
-  single question most likely to make the effort redundant. If private
-  information retrieval gives wallets private nullifier queries with a better
-  privacy story than bridge-served non-membership proofs, the main use case
-  evaporates. Requires talking to people, not writing code.
+* **Does Tachyon's PIR work subsume this?** ~~Unresolved.~~ **Largely answered
+  2026-09-01, and the answer is mostly yes** — see D44. It did not require
+  talking to people; the code is public. `valargroup/spendability-pir` and its
+  Ironwood fork give wallets private nullifier queries with a strictly better
+  privacy story than bridge-served proofs, at 1.78x the bandwidth, and are
+  wired into a wallet stack. What is *not* subsumed: the beyond-window tail
+  (their coverage is ~289 days, Phase 5a's headline was measured at a year),
+  authenticity (they serve answers, we serve proofs), and the compact state
+  node (untouched — their server sits behind a full node). The main *light
+  client* use case has evaporated. The remaining ones are narrower and are
+  stated as such in PLAN.md.
 * **Phase 0 measurements.** ~~Not taken.~~ **Taken 2026-08-12** against
   zebrad 6.3.0 at mainnet tip; see `docs/benchmarks.md`. They disproved the
   headroom claim in D3, which is corrected above and now carries an open

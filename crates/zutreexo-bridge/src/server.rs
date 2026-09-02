@@ -15,15 +15,16 @@
 //! pool.
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
 use std::time::Instant;
 
 use zutreexo_accumulator::proof::{CanonicalSerialize, NonMembershipResponse};
+use zutreexo_accumulator::sorted::SortedCohort;
 use zutreexo_chain::BlockProofBundle;
 
 use crate::limits::{Limits, RateLimiter};
-use crate::wire::{status, Request, Roots};
-use crate::Bridge;
+use crate::wire::{status, EpochManifest, Request, Roots};
+use crate::{Bridge, BridgeError};
 
 /// Serves one request on an accepted connection.
 ///
@@ -33,6 +34,14 @@ use crate::Bridge;
 pub fn serve_once(bridge: &Bridge, stream: &mut TcpStream) -> std::io::Result<()> {
     serve_once_with(bridge, stream, &Limits::default())
 }
+
+/// Placeholder peer for the un-metered entry points.
+///
+/// [`serve_once_with`] has no accepted address to charge — it is handed a
+/// stream. Rather than silently skip the byte budget it charges this address,
+/// so a caller that wants per-peer accounting has to go through
+/// [`serve_once_metered`] and cannot get it by accident.
+const UNKNOWN_PEER: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 /// Serves one request under explicit limits.
 ///
@@ -45,6 +54,21 @@ pub fn serve_once_with(
     stream: &mut TcpStream,
     limits: &Limits,
 ) -> std::io::Result<()> {
+    serve_once_metered(bridge, stream, limits, UNKNOWN_PEER, None)
+}
+
+/// The same, charging cohort payload against one peer's byte budget.
+///
+/// The budget is separate from the request counter because a cohort is three
+/// orders of magnitude larger than anything else this server sends; see
+/// [`Limits::cohort_bytes_per_minute`].
+pub fn serve_once_metered(
+    bridge: &Bridge,
+    stream: &mut TcpStream,
+    limits: &Limits,
+    peer: IpAddr,
+    limiter: Option<&mut RateLimiter>,
+) -> std::io::Result<()> {
     stream.set_read_timeout(Some(limits.read_timeout))?;
     stream.set_write_timeout(Some(limits.write_timeout))?;
 
@@ -56,6 +80,7 @@ pub fn serve_once_with(
         }
     };
 
+    let mut metered = false;
     let (code, payload) = match Request::from_bytes(&body) {
         Err(_) => (status::BAD_REQUEST, Vec::new()),
         Ok(Request::AccumulatorRoots) => (status::OK, bridge.roots().to_bytes()),
@@ -70,6 +95,26 @@ pub fn serve_once_with(
                 Err(_) => (status::INTERNAL, Vec::new()),
             }
         }
+        Ok(Request::EpochManifest) => (status::OK, bridge.manifest().to_bytes()),
+        Ok(request @ Request::PrefixCohort { pool, epoch, .. }) => {
+            // The range was validated during decode, so this cannot fail; the
+            // guarded form keeps the handler total rather than relying on that
+            // (CLAUDE.md §5 rule 3 — no unwrap in a serving path).
+            match request.prefix_range() {
+                Ok(Some(range)) => match bridge.prove_cohort(pool, epoch, range) {
+                    Ok(cohort) => {
+                        metered = true;
+                        (status::OK, cohort.to_bytes())
+                    }
+                    Err(BridgeError::NoSuchEpoch { .. }) => (status::NO_SUCH_EPOCH, Vec::new()),
+                    Err(BridgeError::PrefixTooNarrow { .. }) => {
+                        (status::PREFIX_TOO_NARROW, Vec::new())
+                    }
+                    Err(_) => (status::INTERNAL, Vec::new()),
+                },
+                _ => (status::BAD_REQUEST, Vec::new()),
+            }
+        }
     };
 
     // A cap on our own output. Refusing to send is better than spending the
@@ -77,6 +122,17 @@ pub fn serve_once_with(
     // client learns the request was refused rather than waiting on a stall.
     if payload.len() > limits.max_response_bytes {
         return write_response(stream, status::INTERNAL, &[]);
+    }
+
+    // Charged only on the payload actually being sent, and only for cohorts:
+    // billing a client for a refusal would let one over-budget request lock it
+    // out of the cheap methods too.
+    if metered {
+        if let Some(limiter) = limiter {
+            if !limiter.allow_bytes(peer, payload.len() as u64) {
+                return write_response(stream, status::BUDGET_EXHAUSTED, &[]);
+            }
+        }
     }
 
     write_response(stream, code, &payload)
@@ -112,7 +168,7 @@ pub fn serve_with(
             continue;
         }
         // One bad connection must not take the server down.
-        let _ = serve_once_with(bridge, &mut stream, limits);
+        let _ = serve_once_metered(bridge, &mut stream, limits, peer.ip(), Some(&mut limiter));
     }
     Ok(())
 }
@@ -287,6 +343,43 @@ impl BridgeClient {
             return Err(ClientError::Status { status });
         }
         Roots::from_bytes(&body).map_err(|e| ClientError::Decode(e.to_string()))
+    }
+
+    /// Fetches the bridge's epoch manifest.
+    ///
+    /// A client should call this first: it carries the prefix floor, and a
+    /// client that learns the floor by being refused has already told the
+    /// bridge the narrow bucket it wanted.
+    pub fn epoch_manifest(&self) -> Result<EpochManifest, ClientError> {
+        let (status, body) = self.call(&Request::EpochManifest)?;
+        if status != status::OK {
+            return Err(ClientError::Status { status });
+        }
+        EpochManifest::from_bytes(&body).map_err(|e| ClientError::Decode(e.to_string()))
+    }
+
+    /// Fetches every nullifier in one prefix bucket of one snapshot epoch.
+    ///
+    /// The bucket is what travels; the nullifier the caller cares about never
+    /// leaves the caller. Settle it locally with
+    /// [`sorted::resolve`](zutreexo_accumulator::sorted::resolve) after
+    /// verifying against the epoch's root from the manifest.
+    pub fn prefix_cohort(
+        &self,
+        pool: zutreexo_accumulator::PoolId,
+        epoch: u32,
+        range: zutreexo_accumulator::cohort::PrefixRange,
+    ) -> Result<SortedCohort, ClientError> {
+        let (status, body) = self.call(&Request::PrefixCohort {
+            pool,
+            epoch,
+            bits: range.bits(),
+            lo: range.lo(),
+        })?;
+        if status != status::OK {
+            return Err(ClientError::Status { status });
+        }
+        SortedCohort::from_bytes(&body).map_err(|e| ClientError::Decode(e.to_string()))
     }
 
     /// Asks whether a nullifier is unspent.
